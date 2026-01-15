@@ -215,7 +215,6 @@ class Simulator:
         # close video writer
         video_writer.close()
 
-        # 写inference信息到txt文件
         with open(txt_path, "w", encoding="utf-8") as f_txt:
             for line in inference_info_lines:
                 f_txt.write(line + "\n")
@@ -385,7 +384,7 @@ class Simulator:
         cv2.imwrite(agentview_path.replace("center","right"),agent_view_right[:,:,::-1])
         cv2.imwrite(eye_path,eye_in_hand[:,:,::-1])
 
-    def plot_action_comparison(self,pred_traj_np,gt_traj_np):
+    def plot_action_comparison(self, pred_traj_np, gt_traj_np):
         episode=self.episodes[0] if isinstance(self.episodes,list) else self.episodes
 
         timesteps = pred_traj_np.shape[0]
@@ -422,7 +421,7 @@ if __name__=="__main__":
     # eposide legth factor, default to 3 times the original eposide length
     parser.add_argument("--episode_length_factor", type=float, default=3)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--save_dir", type=str, default="/home/sunyi/robocasa/eval_trials/0109_test_ours_always_bor_action_chunk20")
+    parser.add_argument("--save_dir", type=str, default="/home/sunyi/robocasa/eval_trials/0113_ours_epoch5+2_bor_interval100_chunk20")
     
     args = parser.parse_args()
     
