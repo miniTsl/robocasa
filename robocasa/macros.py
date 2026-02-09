@@ -10,7 +10,7 @@ To make sure global reference is maintained, should import these settings as:
 SHOW_SITES = False
 
 # whether to print debugging information
-VERBOSE = False
+VERBOSE = True
 
 # Spacemouse settings. Used by SpaceMouse class in robosuite/devices/spacemouse.py
 SPACEMOUSE_VENDOR_ID = 9583

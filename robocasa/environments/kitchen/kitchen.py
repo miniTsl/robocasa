@@ -361,7 +361,7 @@ class Kitchen(ManipulationEnv, metaclass=KitchenEnvMeta):
             self.style_id = int(style_id)
 
         if macros.VERBOSE:
-            print("layout: {}, style: {}".format(self.layout_id, self.style_id))
+            print("Inside _load_model(): layout: {}, style: {}".format(self.layout_id, self.style_id))
 
         # to be set later inside edit_model_xml function
         self._curr_gen_fixtures = self._ep_meta.get("gen_textures")

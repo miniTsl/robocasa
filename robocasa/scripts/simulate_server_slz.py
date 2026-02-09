@@ -11,37 +11,17 @@ m.patch()#enable msgpack to serialize numpy arrays
 import numpy as np
 import math
 import logging
+from PIL import Image
+import os
 import pdb
+from PIL import Image
+
 from typing import Dict,Any,List
 from dataclasses import dataclass, field
-import h5py
-path = "/home/sunyi/robocasa/datasets/v0.1/multi_stage/brewing/PrepareCoffee/2024-05-07/demo_im128.hdf5"
 
-# add proprioceptive state
-# the normalization is done in the wall-x server side
-# List of all required proprioceptive states
-STATE_KEYS = [
-"robot0_eef_pos",          # 3
-"robot0_eef_quat",         # 4
-"robot0_gripper_qpos",     # 2
-"robot0_gripper_qvel",     # 2
-"robot0_joint_pos",        # 7
-"robot0_base_to_eef_pos"   # 3
-]
 
-IMAGE_KEYS = [
-"robot0_eye_in_hand_image", # 3, 128, 128
-"robot0_agentview_left_image", # 3, 128, 128
-"robot0_agentview_right_image" # 3, 128, 128
-]
-
-def replace_obs_with_gt(obs, index):
-    f = h5py.File(path, "r")
-    for key in STATE_KEYS:
-        obs[key] = f["data"]["demo_1"]["obs"][key][index]
-    for key in IMAGE_KEYS:
-        obs[key] = f["data"]["demo_1"]["obs"][key][index]
-
+#需要检查通信方式是否正确
+# 初始化 Logger
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -69,6 +49,9 @@ class SimulateServer:
         # Connect immediately
         self.connect()
 
+    def set_instruction(self,instruction):
+        self.instruction=instruction
+
     def _start_loop(self):
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
@@ -94,32 +77,17 @@ class SimulateServer:
         self.metadata = msgpack.unpackb(await self.websocket.recv())
         print(f"Connected! Server metadata: {self.metadata}")
 
-    def _process_images_for_model_inference(self, obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
-        def _process_image(img):
-            #Flip image up-down 
-            img=np.flipud(img)
-            # send uint8 format
-            if img.dtype!=np.uint8:
-                img=(img*255).astype(np.uint8)
-            return img
-        images_for_model = {
-            "wrist view": _process_image(obs["robot0_eye_in_hand_image"]),
-            "left view": _process_image(obs["robot0_agentview_left_image"]),
-            "right view": _process_image(obs["robot0_agentview_right_image"])
-        }
-        return images_for_model
-    
-    def _get_response(self, observations: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_action(self, observations: Dict[str, Any]) -> Dict[str, Any]:
         """
         Get action from the Wall-X inference server.
         This is a synchronous method that calls the async websocket.
         """
         future = asyncio.run_coroutine_threadsafe(
-            self._get_response_async(observations), self.loop
+            self._predict_async(observations), self.loop
         )
         return future.result()
 
-    async def _get_response_async(self, obs: Dict) -> Dict:
+    async def _predict_async(self, obs: Dict) -> Dict:
         if self.websocket is None:
             raise RuntimeError("Not connected to server")
         
@@ -128,14 +96,27 @@ class SimulateServer:
         return response
 
 
-    def get_response_from_server(self, observations: Dict[str, Any], instruction: str, iter_step: int) -> Dict:
-        """Process observations and get response from the inference server."""
-        # replace_obs_with_gt(observations, iter_step) # for debugging, replace the observations with the ground truth from the dataset, to test if the model can predict the correct action based on the perfect observations
+    def get_actions_from_server(self, observations: Dict[str, Any], sampled_images: Dict[str, np.ndarray], thought: List[str], iter_step: int) -> np.ndarray:
+        """Process observations and get actions from the inference server."""
+        def _combine_images(left_img,right_img,eye_in_hand_img):
+            #已弃用
+            #2*2拼接图片，右下角留白
+            combined_img=np.zeros((2*left_img.shape[0],2*left_img.shape[1],3),dtype=np.uint8)
+            combined_img[:left_img.shape[0],:left_img.shape[1]]=left_img
+            combined_img[:left_img.shape[0],left_img.shape[1]:]=right_img
+            combined_img[left_img.shape[0]:,:left_img.shape[1]]=eye_in_hand_img
+            # 填充右下角空白
+            combined_img[left_img.shape[0]:,left_img.shape[1]:]=np.ones_like(combined_img[left_img.shape[0],left_img.shape[1]])*255
+            # 内容不变，缩小到原图大小
+            combined_img=Image.fromarray(combined_img)
+            combined_img=combined_img.resize((left_img.shape[0],left_img.shape[1]),resample=Image.Resampling.LANCZOS)
+            return np.array(combined_img)
+            
+        
+
         def _quat2axisangle(quat):
             """
             Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py#L490C1-L512C55
-            
-            change the quaternion to axis-angle
             """
             # clip quaternion
             if quat[3] > 1.0:
@@ -150,42 +131,48 @@ class SimulateServer:
 
             return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
-        # --- Data Mapping Logic: Env Obs -> Env Message ---
-        env_message = {
-            "instruction": instruction,
-            "step_index": iter_step,
-            "dataset_names": ["umi1/robocasa"],
-        }
-        # pdb.set_trace()
-        env_message.update(self._process_images_for_model_inference(observations))
+        def _normalize_state(state):
+            #参照wall-x中的client示例，新增对state的归一化过程(已弃用)
+            state_min=[0.14009679853916168, -4.078073024749756, 0.7538334727287292, -2.4598827362060547, -3.416140079498291, -1.9598420858383179, 0.0005838712677359581]
+            state_std=[5.863479137420654, 3.9139790534973145, 0.8156288266181946, 5.811497211456299, 7.361121654510498, 4.683920383453369, 0.039888788014650345]
+            state=(state-state_min)/state_std
+            # normalize to [-1,1]
+            state=state*2-1
+            state=np.clip(state,-1,1)
+            return state
 
-        missing_keys = [k for k in STATE_KEYS if k not in observations]
-        if len(missing_keys) == 0:
+        # --- Data Mapping Logic: Env Obs -> Wall-X Obs ---
+        wall_x_obs = {
+            "thought": thought,
+            "step_index": iter_step,
+            "dataset_names": ["umi1/robocasa"],#"umi1/robocasa",
+        }
+        #加入observations中的所有键值对
+        wall_x_obs.update(sampled_images)
+
+        #加入state
+        # robot0_eef_pos (3,) robot0_eef_quat (4,) robot0_gripper_qpos (2,)
+        if "robot0_eef_pos" in observations and "robot0_eef_quat" in observations and "robot0_gripper_qpos" in observations:
             eef_pos = observations["robot0_eef_pos"]
             eef_quat = _quat2axisangle(observations["robot0_eef_quat"])
-            gripper_qpos = observations["robot0_gripper_qpos"]
-            gripper_qvel = observations["robot0_gripper_qvel"]
-            joint_pos = observations["robot0_joint_pos"]
-            base_to_eef_pos = observations["robot0_base_to_eef_pos"]
-
-            # Concatenate all the states into a 1D tensor
-            state = np.concatenate([
-                eef_pos,
-                eef_quat,
-                gripper_qpos,
-                gripper_qvel,
-                joint_pos,
-                base_to_eef_pos
-            ])
-            env_message["state"] = state
+            gripper_qpos = observations["robot0_gripper_qpos"][:1]#keep dim
+            state = np.concatenate([eef_pos, eef_quat, gripper_qpos])
+            wall_x_obs["state"]=state # normalize放到wall-x端进行
         else:
-            print(f"ERROR: missing state(s) in observations: {missing_keys}")
+            print("ERROR: state not found in observations")
             
         
         # --- Request Action ---
-        model_response = self._get_response(env_message) # predict_action shape: [pred_horizon, action_dim] = [32, 12]
-        model_response["predict_action"] = model_response["predict_action"].copy() #make actions writable
-        return model_response
+        response = self._get_action(wall_x_obs) #shape [pred_horizon, action_dim]
+        
+        # --- Process Response ---
+        actions = response["action"].copy() #make actions writable
+        
+        # Assuming Wall-X returns (Pred_Horizon, Action_Dim), expected to be (32,12)
+        action_to_execute = actions
+
+        # Add batch dimension back for VectorEnv
+        return action_to_execute
 
     def close(self):
         if self.loop.is_running():
