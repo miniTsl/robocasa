@@ -35,7 +35,7 @@ RoboCasa works across all major computing platforms. The easiest way to set up i
    cd ..
    git clone https://github.com/robocasa/robocasa
    cd robocasa
-   pip install -e .
+   pip install -e .  # 参考https://github.com/robocasa/robocasa/issues/146#issuecomment-2923011492，注意在安装时robocasa这边的Mujoco版本需要修改一下
    pip install pre-commit; pre-commit install           # Optional: set up code formatter.
 
    (optional: if running into issues with numba/numpy, run: conda install -c numba numba=0.56.4 -y)
