@@ -1,3 +1,20 @@
+# AIoT
+## 环境配置
+参考下面的官方配置，注意把Robocasa `setup.py`中的Mujoco版本改成了`mujoco>=3.2.6`，为了和robosuite保持一致
+
+## Evaluation
+代码集中在`robocasa/scripts/simulator.py`和`robocasa/scripts/simulator_server.py`中
+
+典型执行代码`python -m robocasa.scripts.simulator --port 8010 --save_images`，其中--save_images用来在debug时保存每个step的图片，批量测试时可以不加
+
+`robocasa/scripts/summarize_results.py`可以统计执行完的结果，将其copy到eval的文件夹内执行即可
+
+典型eval结果：
+
+![典型eval结果](eval_tree1.png)
+![典型eval结果](eval_tree2.png)
+
+
 # RoboCasa: Large-Scale Simulation of Everyday Tasks for Generalist Robots
 <!-- ![alt text](https://github.com/UT-Austin-RPL/maple/blob/web/src/overview.png) -->
 <img src="docs/images/robocasa-banner.jpg" width="100%" />
