@@ -145,5 +145,5 @@ robocasa/models/assets/textures
 robocasa/models/assets/generative_textures
 
 
-eval*
+eval_trials/*
 debug/*
