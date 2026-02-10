@@ -11,8 +11,8 @@
 
 典型eval结果：
 
-![典型eval结果](eval_tree1.png)
-![典型eval结果](eval_tree2.png)
+![典型eval结果](eval_tree/eval_tree1.png)
+![典型eval结果](eval_tree/eval_tree2.png)
 
 
 # RoboCasa: Large-Scale Simulation of Everyday Tasks for Generalist Robots
