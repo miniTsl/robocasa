@@ -1,6 +1,10 @@
 # AIoT
 ## 环境配置
-参考下面的官方配置，注意把Robocasa `setup.py`中的Mujoco版本改成了`mujoco>=3.2.6`，为了和robosuite保持一致
+1. 参考下面的官方配置，注意Robocasa和robosuite都需要保持Mujoco版本为`mujoco==3.2.6`，所以需要修改robosuite的setup.py，设置`mujoco==3.2.6`
+
+2. msgpack-numpy的版本需要和wallx环境保持一致，这里都设定为`msgpack-numpy==0.4.8`
+
+3. 另外需要安装websockets和matplotlib，均已添加
 
 ## Evaluation
 代码集中在`robocasa/scripts/simulator.py`和`robocasa/scripts/simulator_server.py`中

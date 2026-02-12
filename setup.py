@@ -18,7 +18,7 @@ setup(
         "numpy==1.23.3",
         "numba==0.56.4",
         "scipy>=1.2.3",
-        "mujoco>=3.2.6",    # refer to https://github.com/robocasa/robocasa/issues/146#issuecomment-2923011492
+        "mujoco==3.2.6",
         "pygame",
         "Pillow",
         "opencv-python",
@@ -31,6 +31,9 @@ setup(
         "lxml",
         "hidapi",
         "tianshou==0.4.10",
+        "msgpack-numpy==0.4.8",
+        "websockets",
+        "matplotlib",
     ],
     eager_resources=["*"],
     include_package_data=True,
