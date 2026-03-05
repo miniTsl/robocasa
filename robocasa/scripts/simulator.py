@@ -45,10 +45,10 @@ single_stage_tasks=[
     "NavigateKitchen",
 ]
 multi_stage_tasks=[
-    # "ArrangeVegetables",
-    # "MicrowaveThawing",
-    # "RestockPantry",
-    # "PreSoakPan",
+    "ArrangeVegetables",
+    "MicrowaveThawing",
+    "RestockPantry",
+    "PreSoakPan",
     "PrepareCoffee",
 ]
 class Simulator:
@@ -109,8 +109,8 @@ class Simulator:
         env_kwargs["ignore_done"] = False
         env_kwargs["horizon"] = int(actions.shape[0] * self.episode_length_factor)
         # set the random option for texture and camera initialization
-        env_kwargs["generative_textures"] = None #"100p"
-        env_kwargs["randomize_cameras"] = False #True
+        env_kwargs["generative_textures"] = "100p" #None #"100p"
+        env_kwargs["randomize_cameras"] = True #False #True
         print(
             colored(
                 "Initializing environment for {}...".format(env_kwargs["env_name"]),
@@ -230,7 +230,8 @@ class Simulator:
             inference_info_lines.append(line)
 
             # fix the action dimension from 7 to 12, so the base will not move randomly (not needed anymore since we train the model with the base action)
-            action_queue = predict_action[0, :, :]
+            #action_queue = predict_action[0, :, :]
+            action_queue = predict_action
             # execute the action chunk
             for j in range(min(self.chunk_length, action_queue.shape[0])):
                 # render video and save images
@@ -509,15 +510,15 @@ class Simulator:
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     # number of episodes to evaluate for each task, default to evaluate all episodes
-    parser.add_argument("--num_episodes",type=int, default=1)
+    parser.add_argument("--num_episodes",type=int, default=10)
     # number of test times for each episode
-    parser.add_argument("--num_trials",type=int, default=1)
+    parser.add_argument("--num_trials",type=int, default=5)
     # eposide legth factor, default to x times the original eposide length
-    parser.add_argument("--episode_length_factor", type=float, default=1)
+    parser.add_argument("--episode_length_factor", type=float, default=2)
     # chunk length for action choice, default to 20
     parser.add_argument("--chunk_length", type=int, default=20)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--save_dir", type=str, default="/home/sunyi/robocasa/eval_trials/0208_debug/use_gt_obs_float32")
+    parser.add_argument("--save_dir", type=str, default="/home/zhangxinyue/robocasa/eval_trials/0303_debug/pi0_baseline_changeenv")
     parser.add_argument("--save_images", action="store_true", help="Save images for each step in trial folders")
     
     args = parser.parse_args()

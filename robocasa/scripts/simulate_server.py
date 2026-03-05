@@ -5,9 +5,7 @@ import time
 import threading
 import asyncio
 import websockets
-import msgpack
-import msgpack_numpy as m
-m.patch()#enable msgpack to serialize numpy arrays
+from openpi_client import msgpack_numpy
 import numpy as np
 import math
 import logging
@@ -91,7 +89,7 @@ class SimulateServer:
             ping_timeout=None
         )
         # Receive metadata
-        self.metadata = msgpack.unpackb(await self.websocket.recv())
+        self.metadata = msgpack_numpy.unpackb(await self.websocket.recv())
         print(f"Connected! Server metadata: {self.metadata}")
 
     def _process_images_for_model_inference(self, obs: Dict[str, Any]) -> Dict[str, np.ndarray]:
@@ -123,8 +121,8 @@ class SimulateServer:
         if self.websocket is None:
             raise RuntimeError("Not connected to server")
         
-        await self.websocket.send(msgpack.packb(obs))
-        response = msgpack.unpackb(await self.websocket.recv())
+        await self.websocket.send(msgpack_numpy.packb(obs))
+        response = msgpack_numpy.unpackb(await self.websocket.recv())
         return response
 
 
@@ -167,15 +165,25 @@ class SimulateServer:
             gripper_qvel = observations["robot0_gripper_qvel"]
             joint_pos = observations["robot0_joint_pos"]
             base_to_eef_pos = observations["robot0_base_to_eef_pos"]
+            eef_quat_ori = observations["robot0_eef_quat"]
+            base_pos=observations["robot0_base_pos"] #3
+            base_quat=observations["robot0_base_quat"] #4
 
             # Concatenate all the states into a 1D tensor
+            # state = np.concatenate([
+            #     eef_pos,
+            #     eef_quat,
+            #     gripper_qpos,
+            #     gripper_qvel,
+            #     joint_pos,
+            #     base_to_eef_pos
+            # ])
             state = np.concatenate([
                 eef_pos,
-                eef_quat,
+                eef_quat_ori,
+                base_pos,
+                base_quat,
                 gripper_qpos,
-                gripper_qvel,
-                joint_pos,
-                base_to_eef_pos
             ])
             env_message["state"] = state
         else:
@@ -187,8 +195,37 @@ class SimulateServer:
         model_response["predict_action"] = model_response["predict_action"].copy() #make actions writable
         return model_response
 
-    def close(self):
+    # def close(self):
+    #     if self.loop.is_running():
+    #         if self.websocket:
+    #             asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
+    #         self.loop.call_soon_threadsafe(self.loop.stop)
+
+    def close(self, timeout: float = 5.0):
+        if not hasattr(self, "loop") or self.loop is None:
+            return
+
         if self.loop.is_running():
-            if self.websocket:
-                asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
+            # 1) 先优雅关闭 websocket，并等待完成
+            if self.websocket is not None:
+                fut = asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
+                try:
+                    fut.result(timeout=timeout)
+                except Exception as e:
+                    logger.warning(f"websocket close failed: {e}")
+
+            # 2) 再做 async generators 清理（可选但推荐）
+            fut = asyncio.run_coroutine_threadsafe(self.loop.shutdown_asyncgens(), self.loop)
+            try:
+                fut.result(timeout=timeout)
+            except Exception as e:
+                logger.warning(f"shutdown_asyncgens failed: {e}")
+
+            # 3) 停 loop，并等待后台线程退出
             self.loop.call_soon_threadsafe(self.loop.stop)
+            if hasattr(self, "thread") and self.thread.is_alive():
+                self.thread.join(timeout=timeout)
+
+        # 4) 最后关闭 loop 对象
+        if not self.loop.is_closed():
+            self.loop.close()
