@@ -18,37 +18,37 @@ from robocasa.scripts.simulate_server import SimulateServer
 import pdb
 
 single_stage_tasks=[
-    # "PnPCounterToCab",
-    # "PnPCabToCounter",
-    # "PnPCounterToSink",
-    # "PnPSinkToCounter",
-    # "PnPCounterToMicrowave",
-    # "PnPMicrowaveToCounter",
+    "PnPCounterToCab",
+    "PnPCabToCounter",
+    "PnPCounterToSink",
+    "PnPSinkToCounter",
+    "PnPCounterToMicrowave",
+    "PnPMicrowaveToCounter",
     "PnPCounterToStove",
     "PnPStoveToCounter",
-    # "OpenSingleDoor",
-    # # "CloseSingleDoor",   # File damaged
+    "OpenSingleDoor",
+    # "CloseSingleDoor",   # File damaged
     "OpenDoubleDoor",
     "CloseDoubleDoor",
-    # "OpenDrawer",
-    # "CloseDrawer",
-    # "TurnOnSinkFaucet",
-    # "TurnOffSinkFaucet",
-    # "TurnSinkSpout",
-    # "TurnOnStove",
-    # "TurnOffStove",
-    # "CoffeeSetupMug",
-    # "CoffeeServeMug",
-    # "CoffeePressButton",
-    # "TurnOnMicrowave",
+    "OpenDrawer",
+    "CloseDrawer",
+    "TurnOnSinkFaucet",
+    "TurnOffSinkFaucet",
+    "TurnSinkSpout",
+    "TurnOnStove",
+    "TurnOffStove",
+    "CoffeeSetupMug",
+    "CoffeeServeMug",
+    "CoffeePressButton",
+    "TurnOnMicrowave",
     "TurnOffMicrowave",
     "NavigateKitchen",
 ]
 multi_stage_tasks=[
-    # "ArrangeVegetables",
-    # "MicrowaveThawing",
-    # "RestockPantry",
-    # "PreSoakPan",
+    "ArrangeVegetables",
+    "MicrowaveThawing",
+    "RestockPantry",
+    "PreSoakPan",
     "PrepareCoffee",
 ]
 class Simulator:
@@ -223,10 +223,11 @@ class Simulator:
             predict_action = model_response["predict_action"]
 
             inference_idx = i
+            # text_input_for_action = model_response.get("text_input_for_action", "")
             inference_mode = model_response.get("inference_mode", "")
             reasoning = model_response.get("reasoning", "")
             infer_ms = model_response["server_timing"]["infer_ms"]
-            line = f"step：{inference_idx}，inference_mode：{inference_mode}，reasoning：{reasoning}，infer_ms：{infer_ms}"
+            line = f"step：{inference_idx}\ninference_mode：{inference_mode}\nreasoning：{reasoning}\ninfer_ms：{infer_ms}\n"
             inference_info_lines.append(line)
 
             # fix the action dimension from 7 to 12, so the base will not move randomly (not needed anymore since we train the model with the base action)
@@ -511,13 +512,13 @@ if __name__=="__main__":
     # number of episodes to evaluate for each task, default to evaluate all episodes
     parser.add_argument("--num_episodes",type=int, default=1)
     # number of test times for each episode
-    parser.add_argument("--num_trials",type=int, default=1)
+    parser.add_argument("--num_trials",type=int, default=5)
     # eposide legth factor, default to x times the original eposide length
-    parser.add_argument("--episode_length_factor", type=float, default=1)
+    parser.add_argument("--episode_length_factor", type=float, default=2)
     # chunk length for action choice, default to 20
     parser.add_argument("--chunk_length", type=int, default=20)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--save_dir", type=str, default="/home/sunyi/robocasa/eval_trials/0208_debug/use_gt_obs_float32")
+    parser.add_argument("--save_dir", type=str, default="/home/sunyi/robocasa/eval_trials/0215-stage3-eval-ours")
     parser.add_argument("--save_images", action="store_true", help="Save images for each step in trial folders")
     
     args = parser.parse_args()
