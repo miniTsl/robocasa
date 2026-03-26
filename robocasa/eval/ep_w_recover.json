@@ -4,13 +4,13 @@
     "ep_id": 1,
     "trial_id": 0,
     "actual_length": 1140,
-    "video_secs": 26,
+    "video_secs": 57,
     "video_path": "/data/zhangxinyue/robocasa_eval/1task_stage3_changeenv_recordact/PrepareCoffee/episode_1/trial_0.mp4 ",
     "action_path": "/data/zhangxinyue/robocasa_eval/1task_stage3_changeenv_recordact/PrepareCoffee/episode_1/trial_0_actions.npy",
-    "error_type": "BAD_APPROACH",
+    "error_type": "PLACE_FAIL",
     "error_step": 300,
     "error_secs": 15,
-    "error_description": "The robot's approach was incorrect, causing it to collide with the object.",
-    "how_to_recover": "The robot should have approached the object from a different angle.",
-    "full_reasoning": "todo" 
+    "error_description": "The mug was released with incorrect spatial alignment, causing it to fall off the coffee machine's base.",
+    "how_to_recover": "The robot should hold and move the mug and shift it slightly to the right to align with the base, center it directly under the dispenser, release the mug and then proceed to press the start button.",
+    "full_reasoning": "Failure Type: PLACE_FAIL.\nExplanation: The mug was released with incorrect spatial alignment, causing it to fall off the coffee machine's base.\nHow to Recover: The robot should hold and move the mug and shift it slightly to the right to align with the base, center it directly under the dispenser, release the mug and then proceed to press the start button." 
 }
