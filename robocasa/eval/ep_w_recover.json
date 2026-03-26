@@ -1,16 +1,16 @@
 {
     "task_type": "PrepareCoffee",
     "task_instruction": "pick the mug from the cabinet, place it under the coffee machine dispenser, and press the start button",
-    "ep_id": 1,
-    "trial_id": 0,
-    "actual_length": 1140,
-    "video_secs": 57,
-    "video_path": "/data/zhangxinyue/robocasa_eval/1task_stage3_changeenv_recordact/PrepareCoffee/episode_1/trial_0.mp4 ",
-    "action_path": "/data/zhangxinyue/robocasa_eval/1task_stage3_changeenv_recordact/PrepareCoffee/episode_1/trial_0_actions.npy",
+    "ep_id": 2,
+    "trial_id": 2,
+    "actual_length": 1080,
+    "video_secs": 54,
+    "video_path": "/data/zhangxinyue/robocasa_eval/1task_stage3_changeenv_recordact/PrepareCoffee/episode_2/trial_2.mp4",
+    "action_path": "/data/zhangxinyue/robocasa_eval/1task_stage3_changeenv_recordact/PrepareCoffee/episode_2/trial_2_actions.npy",
     "error_type": "PLACE_FAIL",
-    "error_step": 300,
-    "error_secs": 15,
-    "error_description": "The mug was released with incorrect spatial alignment, causing it to fall off the coffee machine's base.",
-    "how_to_recover": "The robot should hold and move the mug and shift it slightly to the right to align with the base, center it directly under the dispenser, release the mug and then proceed to press the start button.",
-    "full_reasoning": "Failure Type: PLACE_FAIL.\nExplanation: The mug was released with incorrect spatial alignment, causing it to fall off the coffee machine's base.\nHow to Recover: The robot should hold and move the mug and shift it slightly to the right to align with the base, center it directly under the dispenser, release the mug and then proceed to press the start button." 
+    "error_step": 340,
+    "error_secs": 17,
+    "error_description": "The gripper accidentally dropped the mug onto the conuter.",
+    "how_to_recover": "The robot must locate the fallen mug, re-grasp it, pick it up, accurately align it with the coffee machine's base, release the mug and then proceed to press the start button.",
+    "full_reasoning": "Failure Type: PLACE_FAIL.\nExplanation: The gripper accidentally dropped the mug onto the conuter.\nHow to Recover: The robot must locate the fallen mug, re-grasp it, pick it up, accurately align it with the coffee machine's base, release the mug and then proceed to press the start button." 
 }
