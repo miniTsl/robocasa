@@ -18,29 +18,29 @@ from robocasa.scripts.simulate_server import SimulateServer
 import pdb
 
 single_stage_tasks=[
-    # "PnPCounterToCab",
-    # "PnPCabToCounter",
-    # "PnPCounterToSink",
-    # "PnPSinkToCounter",
-    # "PnPCounterToMicrowave",
-    # "PnPMicrowaveToCounter",
+    "PnPCounterToCab",
+    "PnPCabToCounter",
+    "PnPCounterToSink",
+    "PnPSinkToCounter",
+    "PnPCounterToMicrowave",
+    "PnPMicrowaveToCounter",
     "PnPCounterToStove",
     "PnPStoveToCounter",
-    # "OpenSingleDoor",
+    "OpenSingleDoor",
     # # "CloseSingleDoor",   # File damaged
     "OpenDoubleDoor",
     "CloseDoubleDoor",
-    # "OpenDrawer",
-    # "CloseDrawer",
-    # "TurnOnSinkFaucet",
-    # "TurnOffSinkFaucet",
-    # "TurnSinkSpout",
-    # "TurnOnStove",
-    # "TurnOffStove",
-    # "CoffeeSetupMug",
-    # "CoffeeServeMug",
-    # "CoffeePressButton",
-    # "TurnOnMicrowave",
+    "OpenDrawer",
+    "CloseDrawer",
+    "TurnOnSinkFaucet",
+    "TurnOffSinkFaucet",
+    "TurnSinkSpout",
+    "TurnOnStove",
+    "TurnOffStove",
+    "CoffeeSetupMug",
+    "CoffeeServeMug",
+    "CoffeePressButton",
+    "TurnOnMicrowave",
     "TurnOffMicrowave",
     "NavigateKitchen",
 ]
@@ -52,12 +52,13 @@ multi_stage_tasks=[
     "PrepareCoffee",
 ]
 class Simulator:
-    def __init__(self, task, num_episodes, num_trials, save_dir, port, episode_length_factor, chunk_length, camera_height, camera_width, save_images=True):
+    def __init__(self, task, num_episodes, num_trials, save_dir, port, episode_length_factor, chunk_length, camera_height, camera_width, eval_mode="first", save_images=True):
         self.task=task
         self.num_episodes=num_episodes
         self.num_trials=num_trials
         self.save_dir=save_dir
         self.port=port
+        self.eval_mode = eval_mode
         self.dataset_path=get_ds_path(task, ds_type="human_im")
         self.episode_length_factor=episode_length_factor
         self.chunk_length=chunk_length
@@ -109,8 +110,8 @@ class Simulator:
         env_kwargs["ignore_done"] = False
         env_kwargs["horizon"] = int(actions.shape[0] * self.episode_length_factor)
         # set the random option for texture and camera initialization
-        env_kwargs["generative_textures"] = "100p" #None #"100p"
-        env_kwargs["randomize_cameras"] = True #False #True
+        env_kwargs["generative_textures"] = None #"100p"
+        env_kwargs["randomize_cameras"] = False #True
         print(
             colored(
                 "Initializing environment for {}...".format(env_kwargs["env_name"]),
@@ -342,25 +343,31 @@ class Simulator:
         demos = self._get_demo_list()
         total_demos = len(demos)
         
-        # determine the number of episodes to evaluate
+        # determine which episodes to evaluate
         if self.num_episodes <= 0 or self.num_episodes > total_demos:
-            num_episodes = total_demos
+            num_to_eval = total_demos
         else:
-            num_episodes = self.num_episodes
+            num_to_eval = self.num_episodes
         
-        print(colored(f"\nEvaluating task {self.task}, total demos in dataset: {total_demos}, evaluating {num_episodes} episode(s)", "light_blue"))
+        if self.eval_mode == "last":
+            start_idx = max(0, total_demos - num_to_eval)
+            selected_indices = list(range(start_idx, total_demos))
+        else: # default to "first"
+            selected_indices = list(range(num_to_eval))
+
+        print(colored(f"\nEvaluating task {self.task}, total demos in dataset: {total_demos}, evaluating {len(selected_indices)} episode(s) (mode: {self.eval_mode})", "light_blue"))
         
         task_dir = os.path.join(self.save_dir, self.task)
         os.makedirs(task_dir, exist_ok=True)
         
         # task level
         all_results = []
-        # 保存每个 episode 的 language instruction（长度为 num_episodes 的列表）
+        # 保存每个 episode 的 language instruction
         episode_instructions = []
         
         # create task level CSV file
         task_csv_path = os.path.join(task_dir, "avg.csv")
-        # 在 task 级别的 CSV 中也加入 instruction 字段，避免写入时出现未在 fieldnames 中的键
+        # 在 task 级别的 CSV 中也加入 instruction 字段
         task_csv_headers = [
             "episode_index",
             "trial_index",
@@ -376,10 +383,10 @@ class Simulator:
             task_csv_writer = csv.DictWriter(task_csv_file, fieldnames=task_csv_headers)
             task_csv_writer.writeheader()
             
-            # outer loop: iterate over episodes
-            for episode_index in range(num_episodes):
+            # outer loop: iterate over selected episodes
+            for loop_idx, episode_index in enumerate(selected_indices):
                 print(colored(f"\n{'='*60}", "light_blue"))
-                print(colored(f"Starting Episode {episode_index + 1}/{num_episodes}", "light_blue"))
+                print(colored(f"Starting Episode {loop_idx + 1}/{len(selected_indices)} (Dataset Index: {episode_index})", "light_blue"))
                 print(colored(f"{'='*60}", "light_blue"))
                 
                 # create episode directory
@@ -450,9 +457,10 @@ class Simulator:
         # save task level JSON summary file
         task_summary = {
             "task": self.task,
-            # 每个 episode 对应一个 instruction，长度为 num_episodes 的列表
+            "eval_mode": self.eval_mode,
+            # 每个 episode 对应一个 instruction
             "instructions": episode_instructions,
-            "num_episodes": num_episodes,
+            "num_episodes": len(selected_indices),
             "num_trials_per_episode": self.num_trials,
             "total_trials": total_trials,
             "episode_length_factor": self.episode_length_factor,
@@ -470,7 +478,7 @@ class Simulator:
         print(f"\n{'='*60}")
         print(colored(f"Task {self.task} Evaluation Complete!", "green"))
         print((f"{'='*60}"))
-        print(f"Total Episodes: {num_episodes}")
+        print(f"Total Episodes: {len(selected_indices)} (Mode: {self.eval_mode})")
         print(f"Trials per Episode: {self.num_trials}")
         print(f"Total Trials: {total_trials}")
         print(f"Average Action MSE: {avg_action_mse:.4f}")
@@ -518,8 +526,9 @@ if __name__=="__main__":
     # chunk length for action choice, default to 20
     parser.add_argument("--chunk_length", type=int, default=20)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--save_dir", type=str, default="/home/zhangxinyue/robocasa/eval_trials/0303_debug/pi0_baseline_changeenv")
+    parser.add_argument("--save_dir", type=str, default="/home/zhangxinyue/robocasa/eval_trials/0311_debug/1task_stage3_resubase_ood")
     parser.add_argument("--save_images", action="store_true", help="Save images for each step in trial folders")
+    parser.add_argument("--eval_mode", type=str, default="first", choices=["first", "last"], help="Evaluation mode: 'first' for first N episodes, 'last' for last N episodes")
     
     args = parser.parse_args()
     
@@ -531,6 +540,6 @@ if __name__=="__main__":
 
     
     for task in multi_stage_tasks:
-        server = Simulator(task, args.num_episodes, args.num_trials, args.save_dir, args.port, args.episode_length_factor, args.chunk_length, camera_height, camera_width)
+        server = Simulator(task, args.num_episodes, args.num_trials, args.save_dir, args.port, args.episode_length_factor, args.chunk_length, camera_height, camera_width, eval_mode=args.eval_mode, save_images=args.save_images)
         server.run_simulation()
         server.server.close()
