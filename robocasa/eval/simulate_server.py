@@ -10,7 +10,7 @@ import numpy as np
 import math
 import logging
 import pdb
-from typing import Dict,Any,List
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 import h5py
 path = "/home/sunyi/robocasa/datasets/v0.1/multi_stage/brewing/PrepareCoffee/2024-05-07/demo_im128.hdf5"
@@ -126,8 +126,17 @@ class SimulateServer:
         return response
 
 
-    def get_response_from_server(self, observations: Dict[str, Any], instruction: str, iter_step: int) -> Dict:
-        """Process observations and get response from the inference server."""
+    def get_response_from_server(
+        self,
+        observations: Dict[str, Any],
+        instruction: str,
+        iter_step: int,
+        full_reasoning: Optional[str] = None,
+    ) -> Dict:
+        """Process observations and get response from the inference server.
+
+        Optional ``full_reasoning`` is sent as ``env_message["full_reasoning"]`` (recovery rollout).
+        """
         # replace_obs_with_gt(observations, iter_step) # for debugging, replace the observations with the ground truth from the dataset, to test if the model can predict the correct action based on the perfect observations
         def _quat2axisangle(quat):
             """
@@ -154,6 +163,8 @@ class SimulateServer:
             "step_index": iter_step,
             "dataset_names": ["umi1/robocasa"],
         }
+        if full_reasoning:
+            env_message["full_reasoning"] = full_reasoning
         # pdb.set_trace()
         env_message.update(self._process_images_for_model_inference(observations))
 
