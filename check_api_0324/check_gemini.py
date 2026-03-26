@@ -4,6 +4,8 @@ Gemini Video Failure Annotator
 ===============================
 使用 Gemini 视频理解 API + 结构化输出标注 RoboCasa 失败视频。
 
+视频为三联画：单帧内从左到右子画面顺序为 hand → right → left；failure_percent 表示根因时刻 a（非后果时刻 b）。
+
 特点:
   - 支持本地视频上传（Gemini File API）
   - 可调节视频分析帧率 (FPS)
@@ -30,7 +32,7 @@ Gemini Video Failure Annotator
   pip install google-genai pydantic
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal
 import argparse
 import json
@@ -44,12 +46,9 @@ from google import genai
 from google.genai import types
 
 
-# —— 环境视角名称 ——————————————————————————————————————————————————————————
-ENV_VIEW_NAMES = [
-    "eye in hand",
-    "agentview left",
-    "agentview right",
-]
+# —— 环境视角（与导出 MP4 一致：单帧内从左到右子画面顺序）———————————————————
+# 若实际为上下拼接，请同步修改下方 PROMPT 中 "Camera layout" 段落。
+VIEW_NAMES_ORDERED = ("hand", "right", "left")
 
 # ── 数据模型 ─────────────────────────────────────────────────────────────────
 FailureCause = Literal[
@@ -57,12 +56,44 @@ FailureCause = Literal[
     "LOST_GRASP", "PLACE_FAIL", "COLLISION", "REACH_LIMIT", "FREEZE_OR_LOOP", "OTHER"
 ]
 
+_EXPLANATION_FIELD_DESC = (
+    "Detailed failure analysis in English (multiple sentences allowed). MUST explicitly name views "
+    f"{', '.join(repr(v) for v in VIEW_NAMES_ORDERED)} when citing evidence. MUST cover: (1) which "
+    "object(s) or part(s) of the scene are involved (use color/position if needed to disambiguate); "
+    "(2) end-effector / gripper pose relative to the target or scene (offset, orientation); "
+    "(3) motion or force direction (approach, retreat, along which axis or side); (4) spatial "
+    "references (table edge, container rim, hinge side, etc.); (5) which sub-panel(s) support the "
+    "conclusion. Avoid vague one-word labels like 'misalign' or 'wrong object' without this detail."
+)
+
+_RECOVERY_FIELD_DESC = (
+    "Step-by-step recovery in English. Number or separate clear steps. Each step should be actionable: "
+    "what to move where, relative to what reference, and which view(s) (hand / right / left) to use to "
+    "verify alignment. Mirror the specificity of the failure analysis (objects, directions, poses). "
+    "Do not answer with only generic phrases like 're-align', 'reset', or 'should recover'."
+)
+
+
 class VideoAnnotation(BaseModel):
     """结构化输出：Gemini 对失败视频的标注"""
-    failure_percent: int        # 0-100，故障发生在视频的哪个百分比
-    failure_cause: FailureCause # 故障类别（10选1）
-    explanation: str            # 一句话解释为什么失败
-    how_to_recover: str         # 恢复步骤
+    failure_percent: int = Field(
+        ...,
+        ge=0,
+        le=100,
+        description=(
+            "Timeline percent (0-100) at ROOT-CAUSE moment a: the earliest time when a committed mistake "
+            "or bad geometry makes task success impossible or nearly impossible (e.g., closing on a "
+            "misaligned grasp, wrong object instance, wrong manipulation direction). This MUST be a, NOT "
+            "moment b when a later visible outcome occurs (drop, collision stall, timeout). If an early "
+            "alignment/grasp/target error is already clear at a, do NOT set this to the percent at a later b."
+        ),
+    )
+    failure_cause: FailureCause = Field(
+        ...,
+        description="Exactly one ROOT CAUSE category matching the mistake at time a.",
+    )
+    explanation: str = Field(..., description=_EXPLANATION_FIELD_DESC)
+    how_to_recover: str = Field(..., description=_RECOVERY_FIELD_DESC)
 
 
 # ── 提示词 ────────────────────────────────────────────────────────────────
@@ -73,10 +104,20 @@ Task: '{instruction}'
 This episode FAILED — the robot did NOT complete the task.
 IMPORTANT: The robot starts in a reasonable initial pose. The failure happens DURING the episode, not at the start.
 
-Your job:
-1. Identify the PERCENTAGE (0-100) of the video at which the failure FIRST becomes VISUALLY OBVIOUS. This is the earliest moment where a human observer could clearly see the robot will NOT succeed.
+Camera layout (each frame is a horizontal triptych; sub-panels left-to-right):
+- hand: gripper / eye-in-hand camera
+- right: right agent (third-person) view
+- left: left agent (third-person) view
+When you describe what you see or what to do, explicitly reference these view names (hand, right, left).
 
-2. Classify the ROOT CAUSE into exactly ONE category:
+Two timeline concepts (critical):
+- Moment a (ROOT CAUSE): the earliest time when the policy commits a mistake or geometry that already makes success impossible or nearly impossible — e.g., gripper clearly misaligned but still closes, wrong object instance engaged, wrong approach direction locked in. At a there may be NO dramatic failure yet (no drop, no big collision).
+- Moment b (OUTCOME): a later time when the consequence becomes obvious — object falls, repeated slipping, collision stop, freeze, etc. Often several seconds after a.
+
+Your job:
+1. Set failure_percent to the percentage (0-100) of the video duration at moment **a** (root cause), NOT at **b**. If both exist, **a** is always earlier or equal; never choose b when a is already identifiable. Do not anchor on the first "dramatic" failure if an earlier fatal mistake is visible.
+
+2. Classify the ROOT CAUSE into exactly ONE category (the mistake at time a):
    - WRONG_TARGET: wrong object/instance manipulated
    - BAD_APPROACH: correct target, but approach/pose wrong
    - CONTACT_FAIL: contact happens but no effective grasp formed
@@ -88,9 +129,9 @@ Your job:
    - FREEZE_OR_LOOP: freeze, hang, or repetitive micro-motions
    - OTHER: none of the above
 
-3. Explain WHY it failed in one sentence.
+3. Fill `explanation`: detailed failure analysis. Use view names hand/right/left. Cover objects, gripper pose vs target, motion directions, spatial references, and which views support your judgment.
 
-4. Describe step-by-step RECOVERY: specific actions to correct and complete the task from failure point.
+4. Fill `how_to_recover`: concrete numbered or stepwise recovery from the situation at time a, with directions, references, and which view to check — not generic recovery slogans.
 """
 
 VALID_CAUSES = {
@@ -218,7 +259,7 @@ def annotate_episode(client, model, instruction, video_path, episode_length, fps
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=VideoAnnotation,
-                temperature=1,
+                temperature=0.35,
             ),
         )
 

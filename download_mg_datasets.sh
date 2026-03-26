@@ -20,11 +20,11 @@ TASKS=(
     # "single_panda_gripper.OpenDoubleDoor"
     # "single_panda_gripper.OpenDrawer"
     # "single_panda_gripper.OpenSingleDoor"
-    "single_panda_gripper.PnPCabToCounter"
-    "single_panda_gripper.PnPCounterToCab"
-    "single_panda_gripper.PnPCounterToMicrowave"
-    "single_panda_gripper.PnPCounterToSink"
-    "single_panda_gripper.PnPCounterToStove"
+    # "single_panda_gripper.PnPCabToCounter"
+    # "single_panda_gripper.PnPCounterToCab"
+    # "single_panda_gripper.PnPCounterToMicrowave"
+    # "single_panda_gripper.PnPCounterToSink"
+    # "single_panda_gripper.PnPCounterToStove"
     # "single_panda_gripper.PnPMicrowaveToCounter"
     # "single_panda_gripper.PnPSinkToCounter"
     # "single_panda_gripper.PnPStoveToCounter"
@@ -34,7 +34,7 @@ TASKS=(
     # "single_panda_gripper.TurnOnMicrowave"
     # "single_panda_gripper.TurnOnSinkFaucet"
     # "single_panda_gripper.TurnOnStove"
-    # "single_panda_gripper.TurnSinkSpout"
+    "single_panda_gripper.TurnSinkSpout"
 )
 
 TOTAL=${#TASKS[@]}
