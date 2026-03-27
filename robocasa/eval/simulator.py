@@ -45,10 +45,10 @@ single_stage_tasks=[
     "NavigateKitchen",
 ]
 multi_stage_tasks=[
-    "ArrangeVegetables",
-    "MicrowaveThawing",
-    "RestockPantry",
-    "PreSoakPan",
+    # "ArrangeVegetables",
+    # "MicrowaveThawing",
+    # "RestockPantry",
+    # "PreSoakPan",
     "PrepareCoffee",
 ]
 class Simulator:
@@ -535,7 +535,7 @@ if __name__=="__main__":
     # chunk length for action choice, default to 20
     parser.add_argument("--chunk_length", type=int, default=20)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--save_dir", type=str, default="/home/zhangxinyue/robocasa/eval_trials/0311_debug/1task_stage3_resubase_ood")
+    parser.add_argument("--save_dir", type=str, default="/home/zhangxinyue/robocasa/eval_trials/0311_debug/1task_stage3_changeenv_recordact")
     parser.add_argument("--save_images", action="store_true", help="Save images for each step in trial folders")
     parser.add_argument("--eval_mode", type=str, default="first", choices=["first", "last"], help="Evaluation mode: 'first' for first N episodes, 'last' for last N episodes")
     parser.add_argument("--save_actions", action="store_true", help="Save executed actions passed to env.step for each trial")

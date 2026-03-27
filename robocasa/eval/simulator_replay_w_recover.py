@@ -2,6 +2,7 @@
     Replay saved actions until error_step, then let the remote model take over with full_reasoning.
 """
 import argparse
+import csv
 import h5py
 import json
 import os
@@ -13,6 +14,7 @@ from robocasa.utils.dataset_registry import get_ds_path
 from termcolor import colored
 from robocasa.eval.simulate_server import SimulateServer
 
+# python -m robocasa.eval.simulator_replay_w_recover --port 8011 --save_actions --recover_json /home/zhangxinyue/robocasa/robocasa/eval/ep_w_recover.json --replay_id 0
 single_stage_tasks=[
     "PnPCounterToCab",
     "PnPCabToCounter",
@@ -465,6 +467,12 @@ if __name__=="__main__":
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--save_images", action="store_true", help="Save images for each step in trial folders")
     parser.add_argument("--save_actions", action="store_true", help="Save executed actions for this recovery trial")
+    parser.add_argument(
+        "--recover_attempts",
+        type=int,
+        default=1,
+        help="Number of recovery attempts on the same trajectory",
+    )
 
     args = parser.parse_args()
 
@@ -489,5 +497,45 @@ if __name__=="__main__":
         save_images=args.save_images,
         save_actions=args.save_actions,
     )
-    server.run_recovery_simulation(args.recover_json, args.replay_id)
+
+    attempt_results = []
+    assert args.recover_attempts >= 1, "recover_attempts must be >= 1"
+    if args.recover_attempts == 1:
+        result = server.run_recovery_simulation(args.recover_json, args.replay_id)
+        attempt_results.append(
+            {
+                "attempt_idx": 0,
+                "replay_id": str(args.replay_id),
+                "success": int(result.get("success", 0)),
+                "actual_length": result.get("actual_length", ""),
+                "action_mse": result.get("action_mse", ""),
+                "state_mse": result.get("state_mse", ""),
+            }
+        )
+    else:
+        for attempt_idx in range(args.recover_attempts):
+            replay_id_i = f"{args.replay_id}_attempt{attempt_idx}"
+            print(colored(f"Running recovery attempt {attempt_idx + 1}/{args.recover_attempts}, replay_id={replay_id_i}", "yellow"))
+            result = server.run_recovery_simulation(args.recover_json, replay_id_i)
+            attempt_results.append(
+                {
+                    "attempt_idx": attempt_idx,
+                    "replay_id": replay_id_i,
+                    "success": int(result.get("success", 0)),
+                    "actual_length": result.get("actual_length", ""),
+                    "action_mse": result.get("action_mse", ""),
+                    "state_mse": result.get("state_mse", ""),
+                }
+            )
+
+    summary_csv_path = os.path.join(replay_out_dir, f"recover_summary_{str(args.replay_id)}.csv")
+    with open(summary_csv_path, "w", newline="", encoding="utf-8") as f_csv:
+        writer = csv.DictWriter(
+            f_csv,
+            fieldnames=["attempt_idx", "replay_id", "success", "actual_length", "action_mse", "state_mse"],
+        )
+        writer.writeheader()
+        writer.writerows(attempt_results)
+    print(colored(f"Saved recovery summary to: {summary_csv_path}", "light_blue"))
+
     server.server.close()

@@ -12,5 +12,5 @@
     "error_secs": 17,
     "error_description": "The gripper accidentally dropped the mug onto the conuter.",
     "how_to_recover": "The robot must locate the fallen mug, re-grasp it, pick it up, accurately align it with the coffee machine's base, release the mug and then proceed to press the start button.",
-    "full_reasoning": "Failure Type: PLACE_FAIL.\nExplanation: The gripper accidentally dropped the mug onto the conuter.\nHow to Recover: The robot must locate the fallen mug, re-grasp it, pick it up, accurately align it with the coffee machine's base, release the mug and then proceed to press the start button." 
+    "full_reasoning": "Perception: Kitchen counter scene with a coffee machine on the counter and a sink to the right. The upper cabinet door is open.  The robot arm is at the front of the machine; the gripper is near the mug and appears to grasp it. The mug is not upright on the tray. Reflection: The gripper accidentally dropped the mug onto the conuter. Plan: The robot must locate the fallen mug, re-grasp it, pick it up, accurately align it with the coffee machine's base, release the mug and then proceed to press the start button. Immediate Next Action: The gripper grasps the mug." 
 }
