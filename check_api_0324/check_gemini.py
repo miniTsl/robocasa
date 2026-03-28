@@ -52,8 +52,17 @@ VIEW_NAMES_ORDERED = ("hand", "right", "left")
 
 # ── 数据模型 ─────────────────────────────────────────────────────────────────
 FailureCause = Literal[
-    "WRONG_TARGET", "BAD_APPROACH", "CONTACT_FAIL", "WRONG_MANIPULATION",
-    "LOST_GRASP", "PLACE_FAIL", "COLLISION", "REACH_LIMIT", "FREEZE_OR_LOOP", "OTHER"
+    "WRONG_TARGET", 
+    "BAD_APPROACH", 
+    "CONTACT_FAIL", 
+    "WRONG_MANIPULATION",
+    "WRONG_OBJECT",
+    "LOST_GRASP", 
+    "PLACE_FAIL", 
+    "COLLISION", 
+    "REACH_LIMIT", 
+    "FREEZE_OR_LOOP", 
+    "OTHER"
 ]
 
 _EXPLANATION_FIELD_DESC = (
