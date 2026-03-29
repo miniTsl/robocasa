@@ -1,10 +1,4 @@
 {
-  "PnPCounterToCab": "https://utexas.box.com/shared/static/7y9csrcx6uhhq4p3yctmm2df3rjqpw6g.hdf5",
-  "PnPCabToCounter": "https://utexas.box.com/shared/static/mfltre5w8qi8ps1fqicblx40p008425z.hdf5",
-  "PnPCounterToSink": "https://utexas.box.com/shared/static/5vkb2fpthnw554q888fynk3zqwsgk2e5.hdf5",
-  "PnPSinkToCounter": "https://utexas.box.com/shared/static/ppj3j8jnxkpusi7ft44f5ut7szkmu8yr.hdf5",
-  "PnPCounterToMicrowave": "https://utexas.box.com/shared/static/vdm6pzl68xqqxvk9iy7i3l62j37t3sbp.hdf5",
-  "PnPMicrowaveToCounter": "https://utexas.box.com/shared/static/3gs5cvp5qyzvk7gplmp0lkwfs1x1mkrj.hdf5",
   "PnPCounterToStove": "https://utexas.box.com/shared/static/1ytpoks6mp9f56wh36ni8k02fz0kbvmb.hdf5",
   "PnPStoveToCounter": "https://utexas.box.com/shared/static/uvrx2d7zxungplafbn9kg6rbe23ysund.hdf5",
   "OpenSingleDoor": "https://utexas.box.com/shared/static/ekf6qwp9s07jnkpazbohlv03d6b73vth.hdf5",

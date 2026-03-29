@@ -9,7 +9,7 @@ from tqdm import tqdm
 # --- 配置项 ---
 JSON_FILE = "single_stage_mg_im_links.json"  # 你的 JSON 文件名
 MAX_WORKERS = 4          # 并发数
-OUTPUT_DIR = "single_stage_mg_hdf5"   # 目标下载文件夹
+OUTPUT_DIR = "/data3/sunyi/robocasa/v0.1/single_stage_mg_hdf5"   # 目标下载文件夹
 
 # 全局停止事件，用于向所有线程广播终止信号
 stop_event = threading.Event()
