@@ -1,22 +1,20 @@
 """
-    Simulator class for robocasa environment.
+    Replay saved actions until error_step, then let the remote model take over with full_reasoning.
 """
 import argparse
+import csv
 import h5py
 import json
-import os 
-import csv
+import os
 import robosuite
 import imageio
-import matplotlib.pyplot as plt
 import cv2
 import numpy as np
 from robocasa.utils.dataset_registry import get_ds_path
 from termcolor import colored
-from collections import OrderedDict
 from robocasa.eval.simulate_server import SimulateServer
-import pdb
 
+# python -m robocasa.eval.simulator_replay_rollout --port 8010 --save_actions --recover_json /home/zhangxinyue/robocasa/robocasa/eval/ep.json --replay_id 0
 single_stage_tasks=[
     "PnPCounterToCab",
     "PnPCabToCounter",
@@ -52,22 +50,29 @@ multi_stage_tasks=[
     "PrepareCoffee",
 ]
 class Simulator:
-    def __init__(self, task, num_episodes, num_trials, save_dir, port, episode_length_factor, chunk_length, camera_height, camera_width, eval_mode="first", save_images=True, save_actions=True):
-        self.task=task
-        self.num_episodes=num_episodes
-        self.num_trials=num_trials
-        self.save_dir=save_dir
-        self.port=port
-        self.eval_mode = eval_mode
-        self.dataset_path=get_ds_path(task, ds_type="human_im")
-        self.episode_length_factor=episode_length_factor
-        self.chunk_length=chunk_length
-        self.camera_names=["robot0_eye_in_hand", "robot0_agentview_left", "robot0_agentview_right"]
-        self.camera_height=camera_height
-        self.camera_width=camera_width
-        self.save_images=save_images
-        self.save_actions=save_actions
-        self.plot_comparison=False
+    def __init__(
+        self,
+        task,
+        save_dir,
+        port,
+        episode_length_factor,
+        chunk_length,
+        camera_height,
+        camera_width,
+        save_images=True,
+        save_actions=False,
+    ):
+        self.task = task
+        self.save_dir = save_dir
+        self.port = port
+        self.dataset_path = get_ds_path(task, ds_type="human_im")
+        self.episode_length_factor = episode_length_factor
+        self.chunk_length = chunk_length
+        self.camera_names = ["robot0_eye_in_hand", "robot0_agentview_left", "robot0_agentview_right"]
+        self.camera_height = camera_height
+        self.camera_width = camera_width
+        self.save_images = save_images
+        self.save_actions = save_actions
         self._init_server()
     
     def _init_server(self):
@@ -111,8 +116,8 @@ class Simulator:
         env_kwargs["ignore_done"] = False
         env_kwargs["horizon"] = int(actions.shape[0] * self.episode_length_factor)
         # set the random option for texture and camera initialization
-        env_kwargs["generative_textures"] = "100p" #None #"100p"
-        env_kwargs["randomize_cameras"] = True #False #True
+        env_kwargs["generative_textures"] = None #"100p"
+        env_kwargs["randomize_cameras"] = False #True
         print(
             colored(
                 "Initializing environment for {}...".format(env_kwargs["env_name"]),
@@ -171,8 +176,22 @@ class Simulator:
     def _get_sim_render_image(self, env, camera_name, height, width):
         return env.sim.render(height=height, width=width, camera_name=camera_name)[::-1]
     
-    def _run_single_trial(self, env, states_ref, initial_state, actions_ref, episode_index, trial_index, video_path, save_images=True):
-        """each trial"""
+    def _run_single_trial(
+        self,
+        env,
+        states_ref,
+        initial_state,
+        actions_ref,
+        episode_index,
+        trial_index,
+        video_path,
+        save_images=True,
+        saved_actions_np=None,
+        error_step=None,
+        full_reasoning=None,
+        last_reasoning_step=None,
+    ):
+        """each trial; if saved_actions_np and error_step set, replay that many steps first"""
 
         # reference trajectory length from the dataset
         traj_len = actions_ref.shape[0]
@@ -216,12 +235,63 @@ class Simulator:
         step_state_mse_list = []
 
         i = 0
+        sampled_history_images = []
+        reasoning_start_step = int(last_reasoning_step) if last_reasoning_step is not None else None
         # obs = {}
         # Get the real initial observation
         obs = env._get_observations(force_update=True)   # the images in _get_observations() is already [128, 128, 3]
+
+        if saved_actions_np is not None and error_step is not None:
+            for k in range(int(error_step)):
+                if reasoning_start_step is not None and i >= reasoning_start_step and (i - reasoning_start_step) % 20 == 0:
+                    sampled_images = self.server._process_images_for_model_inference(obs)
+                    sampled_history_images.append(sampled_images)
+
+                video_img = []
+                for cam_name in self.camera_names:
+                    im = self._get_sim_render_image(env, cam_name, self.camera_height, self.camera_width)
+                    video_img.append(im)
+                    if save_images:
+                        img_path = os.path.join(trial_images_dir, cam_name, f"step_{i:05d}.jpg")
+                        cv2.imwrite(img_path, im[:, :, ::-1])  # convert RGB to BGR for cv2
+                video_img = np.concatenate(video_img, axis=1)  # concatenate horizontally
+                video_writer.append_data(video_img)
+
+                action = np.array(saved_actions_np[k], dtype=np.float64, copy=True).reshape(-1)
+                if action.shape[0] >= 12:
+                    action[7:] = [0, 0, 0, 0, -1]
+                pred_actions.append(np.array(action, copy=True))
+                obs, reward, done, info = env.step(action)
+
+                if i < traj_len - 1:
+                    step_action_mse = np.mean((action - actions_ref[i]) ** 2)
+                    action_deviation += step_action_mse
+                    step_action_mse_list.append((i, step_action_mse))  # (step, action_mse)
+                    state_playback = np.array(env.sim.get_state().flatten())
+                    step_state_mse = np.mean((states_ref[i + 1] - state_playback) ** 2)
+                    state_deviation += step_state_mse
+                    step_state_mse_list.append((i, step_state_mse))  # (step, state_mse)
+
+                if i % 100 == 0:
+                    print(f"Executing step {i} of episode {episode_index + 1}, trial {trial_index + 1}")
+                if not success and env._check_success():
+                    success = True
+                    print(colored(f"Task succeeds at step {i}", "green"))
+
+                if success:
+                    break
+
+                i += 1
+
+
+        first = True
         while i + self.chunk_length <= env.horizon:
             # get the response from the server
-            model_response = self.server.get_response_from_server(obs, instruction, i)
+            if first:
+                model_response = self.server.get_response_from_server(obs, instruction, i, full_reasoning=full_reasoning, sampled_history_images=sampled_history_images)
+                first = False
+            else:
+                model_response = self.server.get_response_from_server(obs, instruction, i)
             predict_action = model_response["predict_action"]
 
             inference_idx = i
@@ -333,11 +403,6 @@ class Simulator:
         print(colored(f"Action MSE: {action_mse}", "yellow"))
         print(colored(f"State MSE: {state_mse}", "yellow"))
 
-        if self.plot_comparison:
-            pred_traj_np = np.array(pred_actions[:min(len(pred_actions), actions_ref.shape[0])])
-            gt_traj_np = actions_ref[:min(len(pred_actions), actions_ref.shape[0]), :]
-            self.plot_action_comparison(pred_traj_np, gt_traj_np)
-
         return {
             "trial_index": trial_index,
             "gt_length": traj_len,
@@ -348,208 +413,149 @@ class Simulator:
             "instruction": instruction
         }
 
-    def run_simulation(self):
-        demos = self._get_demo_list()
-        total_demos = len(demos)
-        
-        # determine which episodes to evaluate
-        if self.num_episodes <= 0 or self.num_episodes > total_demos:
-            num_to_eval = total_demos
+    @staticmethod
+    def _resolve_action_path(recover_json_path, action_path_field):
+        p = action_path_field
+        if not os.path.isabs(p):
+            p = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(recover_json_path)), p))
         else:
-            num_to_eval = self.num_episodes
-        
-        if self.eval_mode == "last":
-            start_idx = max(0, total_demos - num_to_eval)
-            selected_indices = list(range(start_idx, total_demos))
-        else: # default to "first"
-            selected_indices = list(range(num_to_eval))
+            p = os.path.expanduser(p)
+        return p
 
-        print(colored(f"\nEvaluating task {self.task}, total demos in dataset: {total_demos}, evaluating {len(selected_indices)} episode(s) (mode: {self.eval_mode})", "light_blue"))
-        
-        task_dir = os.path.join(self.save_dir, self.task)
-        os.makedirs(task_dir, exist_ok=True)
-        
-        # task level
-        all_results = []
-        # 保存每个 episode 的 language instruction
-        episode_instructions = []
-        
-        # create task level CSV file
-        task_csv_path = os.path.join(task_dir, "avg.csv")
-        # 在 task 级别的 CSV 中也加入 instruction 字段
-        task_csv_headers = [
-            "episode_index",
-            "trial_index",
-            "gt_length",
-            "actual_length",
-            "action_mse",
-            "state_mse",
-            "success",
-            "instruction",
-        ]
-        
-        with open(task_csv_path, "w", newline="") as task_csv_file:
-            task_csv_writer = csv.DictWriter(task_csv_file, fieldnames=task_csv_headers)
-            task_csv_writer.writeheader()
-            
-            # outer loop: iterate over selected episodes
-            for loop_idx, episode_index in enumerate(selected_indices):
-                print(colored(f"\n{'='*60}", "light_blue"))
-                print(colored(f"Starting Episode {loop_idx + 1}/{len(selected_indices)} (Dataset Index: {episode_index})", "light_blue"))
-                print(colored(f"{'='*60}", "light_blue"))
-                
-                # create episode directory
-                episode_dir = os.path.join(task_dir, f"episode_{episode_index}")
-                os.makedirs(episode_dir, exist_ok=True)
-                
-                # episode level CSV file
-                episode_csv_path = os.path.join(episode_dir, f"episode_{episode_index}_trials.csv")
-                # 在 episode 级 CSV 中增加一列 instruction，保存该 episode 的 language instruction
-                episode_csv_headers = ["trial_index", "gt_length", "actual_length", "action_mse", "state_mse", "success", "instruction"]
-                episode_results = []
-                # 当前 episode 的 instruction（同一 episode 的所有 trial 应该相同）
-                episode_instruction = ""
-                
-                with open(episode_csv_path, "w", newline="") as episode_csv_file:
-                    episode_csv_writer = csv.DictWriter(episode_csv_file, fieldnames=episode_csv_headers)
-                    episode_csv_writer.writeheader()
-                    
-                    # inner loop: iterate over trials
-                    episode_name, env, states_ref, initial_state, actions_ref = self._init_env(episode_index)
-                    for trial_index in range(self.num_trials):
-                        print(colored(f"\n--- Episode {episode_index + 1}, Trial {trial_index + 1}/{self.num_trials} ---", "light_blue"))
-                        # video path
-                        video_path = os.path.join(episode_dir, f"trial_{trial_index}.mp4")
-                        # run single trial
-                        result = self._run_single_trial(
-                            env, states_ref, initial_state, actions_ref,
-                            episode_index, trial_index, video_path,
-                            save_images=self.save_images
-                        )
-                        
-                        # 记录当前 episode 的 instruction（同一 episode 的所有 trial 应相同）
-                        if not episode_instruction and result["instruction"]:
-                            episode_instruction = result["instruction"]
-                        
-                        # save to episode CSV
-                        episode_row = {k: result[k] for k in episode_csv_headers}
-                        episode_csv_writer.writerow(episode_row)
-                        episode_csv_file.flush()
-                        
-                        # save to task CSV
-                        task_row = {"episode_index": episode_index, **episode_row}
-                        task_csv_writer.writerow(task_row)
-                        task_csv_file.flush()
-                        
-                        episode_results.append(result)
-                        all_results.append({**result, "episode_index": episode_index})
-                        
-                        # close the environment
-                        env.close()
-                
-                # print episode summary
-                episode_success_rate = sum(r["success"] for r in episode_results) / len(episode_results)
-                print(colored(f"\nEpisode {episode_index} Summary: Success Rate = {episode_success_rate:.2%}", "green"))
-                
-                # 将当前 episode 的 instruction 保存到列表中（若为空，则存空字符串）
-                episode_instructions.append(episode_instruction)
-                
+    def run_recovery_simulation(self, recover_json_path, replay_id):
+        """Load ep_w_recover.json; replay actions from action_path until error_step; then model with full_reasoning.
 
-        # calculate task level statistics
-        total_trials = len(all_results)
-        avg_gt_length = sum(r["gt_length"] for r in all_results) / total_trials
-        avg_actual_length = sum(r["actual_length"] for r in all_results) / total_trials
-        avg_success_rate = sum(r["success"] for r in all_results) / total_trials
-        avg_action_mse = sum(r["action_mse"] for r in all_results) / total_trials
-        avg_state_mse = sum(r["state_mse"] for r in all_results) / total_trials
-        
-        # save task level JSON summary file
-        task_summary = {
-            "task": self.task,
-            "eval_mode": self.eval_mode,
-            # 每个 episode 对应一个 instruction
-            "instructions": episode_instructions,
-            "num_episodes": len(selected_indices),
-            "num_trials_per_episode": self.num_trials,
-            "total_trials": total_trials,
-            "episode_length_factor": self.episode_length_factor,
-            "avg_gt_length": avg_gt_length,
-            "avg_actual_length": avg_actual_length,
-            "avg_success_rate": avg_success_rate,
-            "avg_action_mse": avg_action_mse,
-            "avg_state_mse": avg_state_mse
-        }
-        
-        task_json_path = os.path.join(task_dir, f"{self.task}_summary.json")
-        with open(task_json_path, "w") as f:
-            json.dump(task_summary, f, indent=4)
-        
-        print(f"\n{'='*60}")
-        print(colored(f"Task {self.task} Evaluation Complete!", "green"))
-        print((f"{'='*60}"))
-        print(f"Total Episodes: {len(selected_indices)} (Mode: {self.eval_mode})")
-        print(f"Trials per Episode: {self.num_trials}")
-        print(f"Total Trials: {total_trials}")
-        print(f"Average Action MSE: {avg_action_mse:.4f}")
-        print(f"Average State MSE: {avg_state_mse:.4f}")
-        print(f"Results saved to: {task_dir}")
-        print(colored(f"Average Success Rate: {avg_success_rate:.2f}", "green"))
-        
+        Outputs (video, txt, mse, optional actions) go under dirname(action_path)/replay_rollout/.
+        Video name includes replay_id.
+        """
+        recover_json_path = os.path.abspath(recover_json_path)
+        with open(recover_json_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        assert cfg["task_type"] == self.task
+        ep_id = int(cfg["ep_id"])
+        trial_id = int(cfg["trial_id"])
+        error_step = int(cfg["error_step"])
+        full_reasoning = cfg.get("last_reasoning")
+        last_reasoning_step = cfg.get("last_reasoning_step", None)
 
-    def plot_action_comparison(self, pred_traj_np, gt_traj_np):
-        episode=self.episodes[0] if isinstance(self.episodes,list) else self.episodes
+        action_path_abs = self._resolve_action_path(recover_json_path, cfg["action_path"])
+        saved = np.load(action_path_abs)
+        if saved.ndim == 1:
+            saved = np.expand_dims(saved, 0)
 
-        timesteps = pred_traj_np.shape[0]
-        dim = pred_traj_np.shape[1]
+        replay_out_dir = os.path.join(os.path.dirname(action_path_abs), "replay_rollout")
+        os.makedirs(replay_out_dir, exist_ok=True)
+        rid = str(replay_id).replace(os.sep, "_").replace("/", "_")
+        video_path = os.path.join(replay_out_dir, f"recover_replay_{rid}.mp4")
 
-        fig, axs = plt.subplots(dim, 1, figsize=(15, 5 * dim), sharex=True)
-        fig.suptitle(f"Action Comparison for {self.task} episode {episode}", fontsize=16)
-
-        if dim == 1:
-            axs = [axs]
-
-        for k in range(dim):
-            axs[k].plot(range(timesteps), gt_traj_np[:, k], label="Ground Truth")
-            axs[k].plot(range(timesteps), pred_traj_np[:, k], label="Prediction")
-            axs[k].set_ylabel(f"Action Dim {k+1}")
-            axs[k].legend()
-            axs[k].grid(True)
-
-        axs[-1].set_xlabel("Timestep")
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-        save_path = os.path.join(self.save_dir, f"{self.task}_action_comparison.png")
-        plt.savefig(save_path)
-        print(f"Saved plot to {save_path}")
-        plt.close()
+        _, env, states_ref, initial_state, actions_ref = self._init_env(ep_id)
+        try:
+            return self._run_single_trial(
+                env,
+                states_ref,
+                initial_state,
+                actions_ref,
+                ep_id,
+                trial_id,
+                video_path,
+                save_images=self.save_images,
+                saved_actions_np=saved,
+                error_step=error_step,
+                full_reasoning=full_reasoning,
+                last_reasoning_step=last_reasoning_step,
+            )
+        finally:
+            env.close()
 
 
 if __name__=="__main__":
-    parser = argparse.ArgumentParser()
-    # number of episodes to evaluate for each task, default to evaluate all episodes
-    parser.add_argument("--num_episodes",type=int, default=0)
-    # number of test times for each episode
-    parser.add_argument("--num_trials",type=int, default=2)
-    # eposide legth factor, default to x times the original eposide length
+    parser = argparse.ArgumentParser(description="Replay from ep_w_recover.json then model recovery.")
+    parser.add_argument("--recover_json", type=str, required=True, help="ep_w_recover.json (must contain action_path, etc.)")
+    parser.add_argument(
+        "--replay_id",
+        type=str,
+        required=True,
+        help="Label for this replay run; used in output video name (e.g. 0, 1, run2)",
+    )
     parser.add_argument("--episode_length_factor", type=float, default=2)
-    # chunk length for action choice, default to 20
     parser.add_argument("--chunk_length", type=int, default=20)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--save_dir", type=str, default="/home/zhangxinyue/robocasa/eval_trials/pi05_baseline_changeenv/complex")
     parser.add_argument("--save_images", action="store_true", help="Save images for each step in trial folders")
-    parser.add_argument("--eval_mode", type=str, default="first", choices=["first", "last"], help="Evaluation mode: 'first' for first N episodes, 'last' for last N episodes")
-    parser.add_argument("--save_actions", action="store_true", help="Save executed actions passed to env.step for each trial")
-    
-    args = parser.parse_args()
-    
-    if not os.path.exists(args.save_dir):
-        os.makedirs(args.save_dir, exist_ok=True)
-    
-    camera_height=512
-    camera_width=768
+    parser.add_argument("--save_actions", action="store_true", help="Save executed actions for this recovery trial")
+    parser.add_argument(
+        "--recover_attempts",
+        type=int,
+        default=50,
+        help="Number of recovery attempts on the same trajectory",
+    )
 
-    
-    for task in multi_stage_tasks:
-        server = Simulator(task, args.num_episodes, args.num_trials, args.save_dir, args.port, args.episode_length_factor, args.chunk_length, camera_height, camera_width, eval_mode=args.eval_mode, save_images=args.save_images, save_actions=args.save_actions)
-        server.run_simulation()
-        server.server.close()
+    args = parser.parse_args()
+
+    with open(args.recover_json, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    task = cfg["task_type"]
+    action_path_abs = Simulator._resolve_action_path(args.recover_json, cfg["action_path"])
+    replay_out_dir = os.path.join(os.path.dirname(action_path_abs), "replay_rollout")
+    os.makedirs(replay_out_dir, exist_ok=True)
+
+    camera_height = 512
+    camera_width = 768
+
+    server = Simulator(
+        task,
+        replay_out_dir,
+        args.port,
+        args.episode_length_factor,
+        args.chunk_length,
+        camera_height,
+        camera_width,
+        save_images=args.save_images,
+        save_actions=args.save_actions,
+    )
+
+    attempt_results = []
+    total_success = 0
+    assert args.recover_attempts >= 1, "recover_attempts must be >= 1"
+    if args.recover_attempts == 1:
+        result = server.run_recovery_simulation(args.recover_json, args.replay_id)
+        attempt_results.append(
+            {
+                "attempt_idx": 0,
+                "replay_id": str(args.replay_id),
+                "success": int(result.get("success", 0)),
+                "actual_length": result.get("actual_length", ""),
+                "action_mse": result.get("action_mse", ""),
+                "state_mse": result.get("state_mse", ""),
+            }
+        )
+    else:
+        for attempt_idx in range(args.recover_attempts):
+            replay_id_i = f"{args.replay_id}_attempt{attempt_idx}"
+            print(colored(f"Running recovery attempt {attempt_idx + 1}/{args.recover_attempts}, replay_id={replay_id_i}", "yellow"))
+            result = server.run_recovery_simulation(args.recover_json, replay_id_i)
+            if result.get("success", 0):
+                total_success += 1
+            print("now success count", total_success)
+            attempt_results.append(
+                {
+                    "attempt_idx": attempt_idx,
+                    "replay_id": replay_id_i,
+                    "success": int(result.get("success", 0)),
+                    "actual_length": result.get("actual_length", ""),
+                    "action_mse": result.get("action_mse", ""),
+                    "state_mse": result.get("state_mse", ""),
+                }
+            )
+
+    summary_csv_path = os.path.join(replay_out_dir, f"recover_summary_{str(args.replay_id)}.csv")
+    with open(summary_csv_path, "w", newline="", encoding="utf-8") as f_csv:
+        writer = csv.DictWriter(
+            f_csv,
+            fieldnames=["attempt_idx", "replay_id", "success", "actual_length", "action_mse", "state_mse"],
+        )
+        writer.writeheader()
+        writer.writerows(attempt_results)
+    print(colored(f"Saved recovery summary to: {summary_csv_path}", "light_blue"))
+    print(colored(f"Total successful recoveries: {total_success}/{args.recover_attempts}", "light_blue"))
+
+    server.server.close()

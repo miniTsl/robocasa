@@ -9,7 +9,7 @@
 ## Evaluation
 代码集中在`robocasa/scripts/simulator.py`和`robocasa/scripts/simulator_server.py`中
 
-典型执行代码`python -m robocasa.scripts.simulator --port 8010 --save_images`，其中--save_images用来在debug时保存每个step的图片，批量测试时可以不加
+典型执行代码`python -m robocasa.eval.simulator --port 8010 --save_images`，其中--save_images用来在debug时保存每个step的图片，批量测试时可以不加
 
 `robocasa/scripts/summarize_results.py`可以统计执行完的结果，将其copy到eval的文件夹内执行即可
 

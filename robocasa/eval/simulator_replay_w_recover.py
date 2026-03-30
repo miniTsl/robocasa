@@ -14,7 +14,7 @@ from robocasa.utils.dataset_registry import get_ds_path
 from termcolor import colored
 from robocasa.eval.simulate_server import SimulateServer
 
-# python -m robocasa.eval.simulator_replay_w_recover --port 8011 --save_actions --recover_json /home/zhangxinyue/robocasa/robocasa/eval/ep_w_recover.json --replay_id 0
+# python -m robocasa.eval.simulator_replay_w_recover --port 8011 --save_actions --recover_json /home/zhangxinyue/robocasa/robocasa/eval/ep.json --replay_id 0
 single_stage_tasks=[
     "PnPCounterToCab",
     "PnPCabToCounter",
@@ -276,9 +276,14 @@ class Simulator:
 
                 i += 1
 
+        first = True
         while i + self.chunk_length <= env.horizon:
             # get the response from the server
-            model_response = self.server.get_response_from_server(obs, instruction, i, full_reasoning=full_reasoning)
+            if first:
+                model_response = self.server.get_response_from_server(obs, instruction, i, full_reasoning=full_reasoning)
+                first = False
+            else:
+                model_response = self.server.get_response_from_server(obs, instruction, i)
             predict_action = model_response["predict_action"]
 
             inference_idx = i
@@ -470,7 +475,7 @@ if __name__=="__main__":
     parser.add_argument(
         "--recover_attempts",
         type=int,
-        default=1,
+        default=50,
         help="Number of recovery attempts on the same trajectory",
     )
 
@@ -499,6 +504,7 @@ if __name__=="__main__":
     )
 
     attempt_results = []
+    total_success = 0
     assert args.recover_attempts >= 1, "recover_attempts must be >= 1"
     if args.recover_attempts == 1:
         result = server.run_recovery_simulation(args.recover_json, args.replay_id)
@@ -517,6 +523,9 @@ if __name__=="__main__":
             replay_id_i = f"{args.replay_id}_attempt{attempt_idx}"
             print(colored(f"Running recovery attempt {attempt_idx + 1}/{args.recover_attempts}, replay_id={replay_id_i}", "yellow"))
             result = server.run_recovery_simulation(args.recover_json, replay_id_i)
+            if result.get("success", 0):
+                total_success += 1
+            print("now success count", total_success)
             attempt_results.append(
                 {
                     "attempt_idx": attempt_idx,
@@ -537,5 +546,6 @@ if __name__=="__main__":
         writer.writeheader()
         writer.writerows(attempt_results)
     print(colored(f"Saved recovery summary to: {summary_csv_path}", "light_blue"))
+    print(colored(f"Total successful recoveries: {total_success}/{args.recover_attempts}", "light_blue"))
 
     server.server.close()

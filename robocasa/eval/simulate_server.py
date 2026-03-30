@@ -132,6 +132,7 @@ class SimulateServer:
         instruction: str,
         iter_step: int,
         full_reasoning: Optional[str] = None,
+        sampled_history_images = None,
     ) -> Dict:
         """Process observations and get response from the inference server.
 
@@ -165,6 +166,8 @@ class SimulateServer:
         }
         if full_reasoning:
             env_message["full_reasoning"] = full_reasoning
+        if sampled_history_images is not None:
+            env_message["history_images"] = sampled_history_images
         # pdb.set_trace()
         env_message.update(self._process_images_for_model_inference(observations))
 

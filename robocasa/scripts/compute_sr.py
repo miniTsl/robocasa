@@ -37,7 +37,7 @@ def calculate_success_rates(csv_path):
 # ---------------------- 主执行代码 ----------------------
 if __name__ == "__main__":
     # 请替换为你的CSV文件路径
-    csv_file_path = "/home/zhangxinyue/robocasa/eval_trials/0303_debug/PrepareCoffee/avg.csv"
+    csv_file_path = "/home/zhangxinyue/robocasa/eval_trials/pi05_baseline_changeenv/complex/ArrangeVegetables/avg.csv"
     
     try:
         overall_rate, topk_rate = calculate_success_rates(csv_file_path)
