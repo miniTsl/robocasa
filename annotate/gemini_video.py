@@ -40,18 +40,13 @@ import os
 import sys
 import time
 import subprocess
-import re
 from pathlib import Path
 from google import genai
 from google.genai import types
 
 
-# —— 环境视角（与导出 MP4 一致：单帧内从左到右子画面顺序）———————————————————
-# 若实际为上下拼接，请同步修改下方 PROMPT 中 "Camera layout" 段落。
-VIEW_NAMES_ORDERED = ("hand", "right", "left")
-
 # ── 数据模型 ─────────────────────────────────────────────────────────────────
-FailureCause = Literal[
+FailureType = Literal[
     "WRONG_TARGET", 
     "BAD_APPROACH", 
     "CONTACT_FAIL", 
@@ -65,92 +60,124 @@ FailureCause = Literal[
     "OTHER"
 ]
 
-_EXPLANATION_FIELD_DESC = (
-    "Detailed failure analysis in English (multiple sentences allowed). MUST explicitly name views "
-    f"{', '.join(repr(v) for v in VIEW_NAMES_ORDERED)} when citing evidence. MUST cover: (1) which "
-    "object(s) or part(s) of the scene are involved (use color/position if needed to disambiguate); "
-    "(2) end-effector / gripper pose relative to the target or scene (offset, orientation); "
-    "(3) motion or force direction (approach, retreat, along which axis or side); (4) spatial "
-    "references (table edge, container rim, hinge side, etc.); (5) which sub-panel(s) support the "
-    "conclusion. Avoid vague one-word labels like 'misalign' or 'wrong object' without this detail."
-)
-
-_RECOVERY_FIELD_DESC = (
-    "Step-by-step recovery in English. Number or separate clear steps. Each step should be actionable: "
-    "what to move where, relative to what reference, and which view(s) (hand / right / left) to use to "
-    "verify alignment. Mirror the specificity of the failure analysis (objects, directions, poses). "
-    "Do not answer with only generic phrases like 're-align', 'reset', or 'should recover'."
-)
-
-
 class VideoAnnotation(BaseModel):
-    """结构化输出：Gemini 对失败视频的标注"""
-    failure_percent: int = Field(
+
+    failure_position: int = Field(
         ...,
         ge=0,
         le=100,
-        description=(
-            "Timeline percent (0-100) at ROOT-CAUSE moment a: the earliest time when a committed mistake "
-            "or bad geometry makes task success impossible or nearly impossible (e.g., closing on a "
-            "misaligned grasp, wrong object instance, wrong manipulation direction). This MUST be a, NOT "
-            "moment b when a later visible outcome occurs (drop, collision stall, timeout). If an early "
-            "alignment/grasp/target error is already clear at a, do NOT set this to the percent at a later b."
-        ),
     )
-    failure_cause: FailureCause = Field(
+    failure_type: FailureType = Field(
         ...,
-        description="Exactly one ROOT CAUSE category matching the mistake at time a.",
     )
-    explanation: str = Field(..., description=_EXPLANATION_FIELD_DESC)
-    how_to_recover: str = Field(..., description=_RECOVERY_FIELD_DESC)
+    perception: str = Field(
+        ...,
+    )
+    summary: str = Field(
+        ...,
+    )
+    reflection: str = Field(
+        ...,
+    )
+    plan: str = Field(
+        ...,
+    )
+    next_subtask: str = Field(
+        ...,
+    )
 
 
 # ── 提示词 ────────────────────────────────────────────────────────────────
-PROMPT = """You are observing a robot manipulation task in simulation.
+PROMPT = """You are an expert of robot manipulation task analysis.
+==========
+You are observing a FAILED robot manipulation video in simulation. And your job is to find the FIRST failure in the video and analyze it.
 
-Task: '{instruction}'
+==========
+INPUT (will be supplied to you):
 
-This episode FAILED — the robot did NOT complete the task.
-IMPORTANT: The robot starts in a reasonable initial pose. The failure happens DURING the episode, not at the start.
+- Task: '{instruction}'
+- Video: The video of the failed task. 
 
-Camera layout (each frame is a horizontal triptych; sub-panels left-to-right):
-- hand: gripper / eye-in-hand camera
-- right: right agent (third-person) view
-- left: left agent (third-person) view
-When you describe what you see or what to do, explicitly reference these view names (hand, right, left).
+The camera layout (each frame is a horizontal triptych, from left to right) in the video is: 
+- hand (eye-in-hand camera view)
+- right (right agent (third-person) view)
+- left (left agent (third-person) view)
 
-Two timeline concepts (critical):
-- Moment a (ROOT CAUSE): the earliest time when the policy commits a mistake or geometry that already makes success impossible or nearly impossible — e.g., gripper clearly misaligned but still closes, wrong object instance engaged, wrong approach direction locked in. At a there may be NO dramatic failure yet (no drop, no big collision).
-- Moment b (OUTCOME): a later time when the consequence becomes obvious — object falls, repeated slipping, collision stop, freeze, etc. Often several seconds after a.
+==========
+STRICT OUTPUT FORMAT (required):
 
-Your job:
-1. Set failure_percent to the percentage (0-100) of the video duration at moment **a** (root cause), NOT at **b**. If both exist, **a** is always earlier or equal; never choose b when a is already identifiable. Do not anchor on the first "dramatic" failure if an earlier fatal mistake is visible.
+Return one valid JSON object with exactly these fields:
+{{
+  "failure_position": "...",
+  "failure_type": "...",
+  "perception": "...",
+  "summary": "...",
+  "reflection": "...",
+  "plan": "...",
+  "next_subtask": "..."
+}}
 
-2. Classify the ROOT CAUSE into exactly ONE category (the mistake at time a):
-   - WRONG_TARGET: wrong object/instance manipulated
-   - BAD_APPROACH: correct target, but approach/pose wrong
-   - CONTACT_FAIL: contact happens but no effective grasp formed
-   - WRONG_MANIPULATION: wrong direction/force for manipulation
-   - LOST_GRASP: stable hold lost before task completion
-   - PLACE_FAIL: transport OK, failure at final placement
-   - COLLISION: unintended collision blocks motion
-   - REACH_LIMIT: repeated failure to reach due to limits
-   - FREEZE_OR_LOOP: freeze, hang, or repetitive micro-motions
-   - OTHER: none of the above
+==========
+WHAT TO INCLUDE IN EACH FIELD (content requirements):
 
-3. Fill `explanation`: detailed failure analysis. Use view names hand/right/left. Cover objects, gripper pose vs target, motion directions, spatial references, and which views support your judgment.
+**failure_position**
+An integer from 0 to 100 representing the timeline percent where the FIRST failure happens. 0% = first frame, 100% = last frame.
 
-4. Fill `how_to_recover`: concrete numbered or stepwise recovery from the situation at time a, with directions, references, and which view to check — not generic recovery slogans.
+**failure_type**
+Pick exactly ONE type from the labels below for the failure.
+
+**perception**
+Analysis of the environment scene. You should ONLY focus on the critical objects related to the task. Include their attributes and spatial layout when necessary, such as color, position, shape, etc.
+
+**summary**
+The subtasks that have been executed BEFORE the failure.
+
+**reflection**
+Analysis of what subtask the robot is trying to do and why the failure happens. 
+
+**plan**
+Subtasks for the remaining task. Begin with the subtask for recovery.
+
+**next_subtask**
+The immediate next subtask to be executed for recovery. 
+
+==========
+LABELS FOR FAILURE_TYPE (pick ONE):
+
+- WRONG_TARGET: wrong object/instance manipulated
+- BAD_APPROACH: correct target, but approach/pose wrong
+- CONTACT_FAIL: contact happens but no effective grasp formed
+- WRONG_MANIPULATION: wrong direction/force for manipulation
+- WRONG_OBJECT: wrong object identity vs task (distinct instance/type confusion)
+- LOST_GRASP: stable hold lost before task completion
+- PLACE_FAIL: transport OK, failure at final placement
+- COLLISION: unintended collision blocks motion
+- REACH_LIMIT: repeated failure to reach due to limits
+- FREEZE_OR_LOOP: freeze, hang, or repetitive micro-motions
+- OTHER: none of the above, describe in your own words.
+
+==========
+RULES/SAFEGUARDS:
+
+• Do not hallucinate: never assert the presence of something not visible in the video. Use words like "possibly", "uncertain", "not sure", etc. to express your uncertainty.
+• Output a valid JSON with only the above fields — no extra text or markdown.
+• Keep the perception, reflection, plan, and next_subtask fields in the JSON as specific, concise and plain words.
+
+==========
+EXAMPLE OUTPUT:
+
+{{
+    "failure_position": 25,
+    "failure_type": "BAD_APPROACH",
+    "perception": "Kitchen counter scene with a coffee machine on the counter. The upper cabinet door is open. The robot arm is at the front of the machine; the gripper is grasping the mug and is near the dispenser spout. But the mug is not upright on the tray yet and the gripper is about to lose contact with the mug.",
+    "summary": "Move the arm to the cabinet; Grasp the mug in the cabinet; Move the mug to the drip tray of the coffee machine.",
+    "reflection": "The robot is trying to 'Place the mug on the drip tray'. However, the gripper was tilted left and a little low and mug-tray collision was detected. The grip is slipping, leading to failed placement in the future.",
+    "plan": "Grasps the mug and adjust its position for stable placement; Move the gripper to the start button; Press the start button.",
+    "next_subtask": "Grasps the mug and adjust its position for stable placement."
+}}
 """
 
-VALID_CAUSES = {
-    "WRONG_TARGET", "BAD_APPROACH", "CONTACT_FAIL", "WRONG_MANIPULATION",
-    "LOST_GRASP", "PLACE_FAIL", "COLLISION", "REACH_LIMIT", "FREEZE_OR_LOOP", "OTHER",
-}
-
-
 # ── 工具函数 ────────────────────────────────────────────────────────────────
-
 def load_episodes(jsonl_path):
     """从 metrics_log.jsonl 读取 episode 元数据，按 episode_id 排序"""
     episodes = []
@@ -201,90 +228,202 @@ def read_video_bytes(video_path):
         return f.read()
 
 
-def upload_video_to_gemini(client, video_path):
+
+
+def trim_video_to_first_half(video_path, trim_percent=0.5):
     """
-    上传视频到 Gemini File API 并等待处理完成。
-    返回 genai.types.File 对象。
+    使用 ffmpeg 裁剪视频，只保留前面的部分（去掉后面的百分比）。
+    使用临时文件存储中间结果，然后读入内存，最后删除临时文件。
+
+    Args:
+        video_path: 源视频路径
+        trim_percent: 保留视频的百分比（默认 0.5 = 保留前50%，去掉后50%）
+
+    Returns:
+        (trimmed_video_bytes, original_duration, trimmed_duration)
     """
-    print(f"    Uploading {video_path.name} to Gemini File API...")
-    video_file = client.files.upload(file=str(video_path))
-    print(f"    Upload complete. File ID: {video_file.name}, State: {video_file.state.name}")
+    import tempfile
 
-    # 轮询直到处理完成
-    while video_file.state.name == "PROCESSING":
-        print(f"    Processing... waiting 3 seconds")
-        time.sleep(3)
-        video_file = client.files.get(name=video_file.name)
-
-    if video_file.state.name == "FAILED":
-        raise RuntimeError(f"Video upload failed: {video_file.name}")
-
-    print(f"    File ready. State: {video_file.state.name}")
-    return video_file
-
-
-def build_video_part(client, video_path, fps=1):
-    """
-    构建视频内容部分。
-    < 20MB: 内联字节 + VideoMetadata(fps)
-    >= 20MB: File API 上传 + 返回文件对象
-    """
-    file_size = os.path.getsize(video_path)
-
-    if file_size < 20 * 1024 * 1024:  # < 20MB
-        print(f"    Using inline video (size: {file_size/1024/1024:.1f}MB)")
-        video_bytes = read_video_bytes(video_path)
-        return types.Part(
-            inline_data=types.Blob(
-                data=video_bytes,
-                mime_type="video/mp4"
-            ),
-            video_metadata=types.VideoMetadata(fps=fps)
+    try:
+        # 获取原始视频时长
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+            capture_output=True, text=True, timeout=10
         )
-    else:  # >= 20MB
-        print(f"    Using File API upload (size: {file_size/1024/1024:.1f}MB)")
-        video_file = upload_video_to_gemini(client, video_path)
-        # 返回文件对象，Gemini 会自动使用 VideoMetadata
-        # （注：File API 目前默认 1 FPS，暂不支持 fps 调节）
-        return video_file
+        original_duration = float(result.stdout.strip())
+
+        # 计算裁剪后的时长
+        trimmed_duration = original_duration * trim_percent
+
+        print(f"    Trimming video: {original_duration:.1f}s → {trimmed_duration:.1f}s (keeping {trim_percent*100:.0f}%)")
+
+        # 创建临时文件
+        temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        temp_path = temp_file.name
+        temp_file.close()
+
+        try:
+            # 使用 ffmpeg 裁剪视频到临时文件
+            result = subprocess.run(
+                ["ffmpeg", "-i", str(video_path), "-t", str(trimmed_duration),
+                 "-c:v", "libx264", "-crf", "23", "-c:a", "aac", "-y", temp_path],
+                capture_output=True, timeout=120
+            )
+
+            if result.returncode != 0:
+                raise RuntimeError(f"ffmpeg failed with return code {result.returncode}")
+
+            # 读取临时文件到内存
+            with open(temp_path, "rb") as f:
+                trimmed_video_bytes = f.read()
+
+            if not trimmed_video_bytes:
+                raise RuntimeError("trimmed video file is empty")
+
+            trimmed_size = len(trimmed_video_bytes)
+            print(f"    Trimmed video in memory: {trimmed_size/1024/1024:.1f}MB")
+
+            return trimmed_video_bytes, original_duration, trimmed_duration
+
+        finally:
+            # 删除临时文件
+            if Path(temp_path).exists():
+                Path(temp_path).unlink()
+
+    except Exception as e:
+        print(f"    Warning: Failed to trim video: {e}")
+        # 返回原始视频字节
+        with open(video_path, "rb") as f:
+            original_bytes = f.read()
+        return original_bytes, None, None
 
 
-def annotate_episode(client, model, instruction, video_path, episode_length, fps=1):
+def build_video_part(video_path, fps=1, trim_percent=0.5):
+    """
+    构建视频内容部分（内联方式）。
+
+    - 自动去掉视频后面的百分比（默认50%）
+    - 直接裁剪到内存，不保存中间文件
+    - 视频大小 < 20MB，使用内联方式
+
+    Args:
+        video_path: 视频文件路径
+        fps: 视频分析帧率
+        trim_percent: 保留视频的百分比（默认0.5 = 保留前50%）
+
+    Returns:
+        (video_part, original_duration, trimmed_duration, actual_trim_percent)
+    """
+    # 裁剪视频到内存
+    video_bytes, original_duration, trimmed_duration = trim_video_to_first_half(
+        video_path, trim_percent=trim_percent
+    )
+
+    # 如果裁剪失败，actual_trim_percent = 1.0
+    if original_duration is None:
+        print(f"    Using original video (trim failed)")
+        actual_trim_percent = 1.0
+    else:
+        actual_trim_percent = trim_percent
+
+    file_size = len(video_bytes)
+    print(f"    Using inline video (size: {file_size/1024/1024:.1f}MB)")
+
+    video_part = types.Part(
+        inline_data=types.Blob(
+            data=video_bytes,
+            mime_type="video/mp4"
+        ),
+        video_metadata=types.VideoMetadata(fps=fps)
+    )
+
+    return video_part, original_duration, trimmed_duration, actual_trim_percent
+
+
+def annotate_episode(client, model, instruction, video_path, episode_length, fps=1, thinking_level="medium", trim_percent=0.5):
     """
     调用 Gemini API 对单个失败 episode 进行标注。
-    返回 (annotation, step, raw_response_json) 或 (None, None, error_str)
+
+    注意：
+    - 视频会被裁剪到前 trim_percent（默认50%）
+    - failure_position 百分比是相对于「裁剪后」的视频
+    - 需要转换回「原始」视频的步数和时间
+
+    Args:
+        client: Gemini 客户端
+        model: 模型名称
+        instruction: 任务指令
+        video_path: 视频文件路径
+        episode_length: 原始 episode 的总步数
+        fps: 视频分析帧率
+        thinking_level: 思考深度
+        trim_percent: 保留视频的百分比
+
+    Returns:
+        (annotation, failure_step_original, failure_time_original, raw_response_json, trim_info)
+        或 (None, None, None, error_str, None)
+
+        trim_info = {
+            'original_duration': 原始视频时长,
+            'trimmed_duration': 裁剪后视频时长,
+            'trim_percent': 裁剪百分比,
+            'failure_position_trimmed': 模型输出的百分比（相对裁剪后）,
+            'failure_position_original': 转换后的百分比（相对原始）
+        }
     """
     try:
-        # 构建视频部分
-        video_part = build_video_part(client, video_path, fps)
+        # 构建视频部分（包括裁剪）
+        video_part, original_duration, trimmed_duration, actual_trim_percent = build_video_part(
+            video_path, fps, trim_percent=trim_percent
+        )
 
         # 构建完整内容
         prompt_text = PROMPT.format(instruction=instruction)
+
+        # 构建配置
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=VideoAnnotation,
+            temperature=0.35,
+            thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
+        )
 
         # 调用 Gemini API，使用结构化输出
         response = client.models.generate_content(
             model=model,
             contents=[video_part, prompt_text],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=VideoAnnotation,
-                temperature=0.35,
-            ),
+            config=config,
         )
 
         # 获取结构化结果
         annotation: VideoAnnotation = response.parsed
 
-        # 计算故障步数
-        step = round(annotation.failure_percent / 100.0 * episode_length)
+        # 重要：模型返回的 failure_position 是相对于「裁剪后」的视频百分比
+        # 需要转换回「原始」视频的百分比
+        failure_position_trimmed = annotation.failure_position  # 相对裁剪后视频 (0-100%)
+        failure_position_original = failure_position_trimmed * actual_trim_percent  # 相对原始视频 (0-100%)
+
+        # 计算故障步数（相对原始 episode）
+        failure_step = round(failure_position_original / 100.0 * episode_length)
 
         # 获取原始 JSON 响应
         raw_json = response.text if hasattr(response, 'text') else json.dumps(annotation.model_dump())
 
-        return annotation, step, raw_json
+        # 构建 trim_info 用于输出显示
+        trim_info = {
+            'original_duration': original_duration,
+            'trimmed_duration': trimmed_duration,
+            'trim_percent': actual_trim_percent,
+            'failure_position_trimmed': failure_position_trimmed,
+            'failure_position_original': failure_position_original,
+        }
+
+        return annotation, failure_step, raw_json, trim_info
 
     except Exception as e:
-        return None, None, str(e)
+        import traceback
+        return None, None, str(e) + "\n" + traceback.format_exc(), None
 
 
 def cleanup_video_file(client, file_id):
@@ -313,11 +452,14 @@ def main():
     parser.add_argument("--model", type=str, default="gemini-3-flash-preview",
                         help="Gemini 模型名 (默认: gemini-3-flash-preview)")
     parser.add_argument("--fps", type=float, default=1,
-                        help="视频分析帧率 FPS (默认: 1, 范围: 0.5-5)")
-    parser.add_argument("--max_fail_per_task", type=int, default=10,
-                        help="每个任务最多标注几个失败 episode (默认: 10)")
+                        help="视频分析帧率 FPS")
+    parser.add_argument("--trim_percent", type=float, default=0.5,
+                        help="保留视频的百分比 (默认: 0.5 = 保留前50%，去掉后50%)")
     parser.add_argument("--api_delay", type=float, default=1.0,
                         help="每次 API 调用后的等待秒数 (默认: 1.0)")
+    parser.add_argument("--thinking_level", type=str, default="medium",
+                        choices=["low", "medium", "high"],
+                        help="Gemini 思考深度 (默认: medium)")
     args = parser.parse_args()
 
     # API Key 验证
@@ -326,10 +468,6 @@ def main():
         print("ERROR: 请设置环境变量 GEMINI_API_KEY", file=sys.stderr)
         print("  export GEMINI_API_KEY='your-gemini-api-key'", file=sys.stderr)
         sys.exit(1)
-
-    # Validate FPS
-    if not (0.5 <= args.fps <= 5):
-        print(f"Warning: FPS {args.fps} outside recommended range [0.5, 5]")
 
     # 初始化 Gemini 客户端
     client = genai.Client(api_key=api_key)
@@ -364,17 +502,13 @@ def main():
             print(f"[SKIP] {task_dir}: no metrics_log.jsonl")
             continue
 
-        if task in results and len(results[task]) >= args.max_fail_per_task:
-            print(f"[DONE] {task}: already has {len(results[task])} annotations")
-            continue
-
         # 加载 episode 元数据
         fail_eps = load_episodes(jsonl)
         ep_to_video = match_videos_to_episodes(task_dir, fail_eps)
 
         print(f"\n{'='*70}")
         print(f"Task: {task}  ({len(fail_eps)} failure episodes)")
-        print(f"Model: {args.model}, FPS: {args.fps}")
+        print(f"Model: {args.model}, FPS: {args.fps}, Trim: {args.trim_percent*100:.0f}%")
         print(f"{'='*70}")
 
         task_results = results.get(task, [])
@@ -410,33 +544,43 @@ def main():
             print(f"  ep{ep_id:3d} (len={ep_length:3d}, {duration_str})")
             print(f"         instruction: {instruction[:60]}...")
 
-            # 调用 Gemini 标注
-            annotation, gemini_step, reply = annotate_episode(
-                client, args.model, instruction, video_path, ep_length, fps=args.fps
+            # 调用 Gemini 标注（视频会被裁剪）
+            annotation, failure_step, reply, trim_info = annotate_episode(
+                client, args.model, instruction, video_path, ep_length, fps=args.fps,
+                thinking_level=args.thinking_level, trim_percent=args.trim_percent
             )
 
-            # 计算故障时间
-            if annotation:
-                gemini_pct = annotation.failure_percent
-                failure_time = round(gemini_pct / 100.0 * duration, 2) if duration else None
-                pct_str = f"{gemini_pct}%"
-                time_str = f"{failure_time:.2f}s" if failure_time is not None else "N/A"
-                cause_str = annotation.failure_cause
-                expl_str = annotation.explanation[:60]
+            # 计算故障时间（基于原始视频时长）
+            if annotation and trim_info:
+                # failure_time 基于「原始」视频时长和转换后的百分比
+                failure_position_original = trim_info['failure_position_original']
+                failure_time = round(failure_position_original / 100.0 * duration, 2) if duration else None
 
-                print(f"         step={gemini_step:3d} ({pct_str:4s}, {time_str:8s}) cause={cause_str:20s} | {expl_str}...")
+                pct_str_trimmed = f"{trim_info['failure_position_trimmed']}%"
+                pct_str_original = f"{failure_position_original:.1f}%"
+                time_str = f"{failure_time:.2f}s" if failure_time is not None else "N/A"
+                failure_type_str = annotation.failure_type
+
+                # 输出显示：(裁剪后%, 原始%, 秒数)
+                print(f"         step={failure_step:3d} (trimmed {pct_str_trimmed:4s} → original {pct_str_original:6s}, {time_str:8s}) type={failure_type_str:20s} | {annotation.perception[:60]}...")
 
                 task_results.append({
                     "episode_id": ep_id,
                     "instruction": instruction,
                     "length": ep_length,
                     "video_duration_sec": duration,
-                    "gemini_pct": gemini_pct,
-                    "gemini_step": gemini_step,
+                    "trimmed_duration_sec": trim_info['trimmed_duration'],
+                    "trim_percent": trim_info['trim_percent'],
+                    "failure_position_trimmed_percent": trim_info['failure_position_trimmed'],
+                    "failure_position_original_percent": failure_position_original,
+                    'failure_step': failure_step,
                     "failure_time_sec": failure_time,
-                    "failure_cause": annotation.failure_cause,
-                    "explanation": annotation.explanation,
-                    "how_to_recover": annotation.how_to_recover,
+                    "failure_type": annotation.failure_type,
+                    "perception": annotation.perception,
+                    "summary": annotation.summary,
+                    "reflection": annotation.reflection,
+                    "plan": annotation.plan,
+                    "next_subtask": annotation.next_subtask,
                     "gemini_reply": reply,
                 })
             else:
