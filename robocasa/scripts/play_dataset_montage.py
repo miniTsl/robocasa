@@ -15,7 +15,7 @@ if __name__ == "__main__":
         "--output",
         type=str,
         help="path to store videos",
-        default="/tmp/robocasa_dataset_montage",
+        default="/data/sunyi/robocasa/",
     )
     parser.add_argument(
         "--num_demos_per_task",
@@ -26,32 +26,38 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     output_dir = args.output
-    output_dir = os.path.expanduser(output_dir)
+    # output_dir = os.path.expanduser(output_dir)
     if os.path.exists(output_dir) is False:
         os.mkdir(output_dir)
 
-    tasks = list(SINGLE_STAGE_TASK_DATASETS) + list(MULTI_STAGE_TASK_DATASETS)
+    tasks = list(MULTI_STAGE_TASK_DATASETS) + list(SINGLE_STAGE_TASK_DATASETS)
 
     for task_i, task in enumerate(tasks):
-        ds_path = get_ds_path(task, ds_type="human_raw")
+        ds_path = get_ds_path(task, ds_type="human_im")
 
         parser = argparse.Namespace()
         parser.dataset = ds_path
 
         parser.render = False
-        parser.video_path = os.path.join(output_dir, f"{task}.mp4")
+        base_path = os.path.splitext(ds_path)[0]  # 去掉.hdf5扩展名
+        base_dir = os.path.dirname(ds_path)  # 获取目录
+        parser.video_path = base_dir
         parser.use_actions = False
         parser.use_abs_actions = False
-        parser.render_image_names = ["robot0_agentview_center", "robot0_eye_in_hand"]
-        parser.use_obs = False
-        parser.n = args.num_demos_per_task
+        parser.render_image_names = [
+            "robot0_agentview_left",
+            "robot0_agentview_right",
+            "robot0_eye_in_hand",
+        ]
+        parser.use_obs = True
+        parser.n = None
         parser.filter_key = None
-        parser.video_skip = 5
+        parser.video_skip = 1
         parser.first = False
         parser.verbose = False
-        parser.extend_states = True
-        parser.camera_height = 512
-        parser.camera_width = 768
+        parser.extend_states = False
+        parser.camera_height = 256
+        parser.camera_width = 256
 
         print(
             colored(

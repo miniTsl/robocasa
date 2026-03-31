@@ -353,15 +353,14 @@ def playback_dataset(args):
 
     # maybe reduce the number of demonstrations to playback
     if args.n is not None:
-        random.shuffle(demos)
+        # random.shuffle(demos) # for random sampling
         demos = demos[: args.n]
 
-    # maybe dump video
-    video_writer = None
-    if write_video:
-        video_writer = imageio.get_writer(args.video_path, fps=20)
-
     for ind in range(len(demos)):
+        video_writer = None
+        if write_video:
+            video_writer = imageio.get_writer(args.video_path + f"/demo_{ind}.mp4", fps=20)
+
         ep = demos[ind]
         print(colored("\nPlaying back episode: {}".format(ep), "yellow"))
 
@@ -490,9 +489,9 @@ def get_playback_args():
         type=str,
         nargs="+",
         default=[
+            "robot0_eye_in_hand",
             "robot0_agentview_left",
             "robot0_agentview_right",
-            "robot0_eye_in_hand",
         ],
         help="(optional) camera name(s) / image observation(s) to use for rendering on-screen or to video. Default is"
         "None, which corresponds to a predefined camera for each env type",

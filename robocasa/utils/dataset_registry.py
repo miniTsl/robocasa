@@ -247,15 +247,15 @@ SINGLE_STAGE_TASK_DATASETS = OrderedDict(
             mg_im="https://utexas.box.com/shared/static/7c8bku46us9a8sddwg3zk6z3p4ce6ya0.hdf5",
         ),
     ),
-    NavigateKitchen=dict(
-        horizon=500,
-        human_path="v0.1/single_stage/kitchen_navigate/NavigateKitchen/2024-05-09",
-        mg_path=None,
-        download_links=dict(
-            human_raw="https://utexas.box.com/shared/static/pzvzuvmkla74kro84yw13uwjr2g89z8m.hdf5",
-            human_im="https://utexas.box.com/shared/static/mbi6011svy2zb436wsf2hhc337aduwmw.hdf5",
-        ),
-    ),
+    # NavigateKitchen=dict(
+    #     horizon=500,
+    #     human_path="v0.1/single_stage/kitchen_navigate/NavigateKitchen/2024-05-09",
+    #     mg_path=None,
+    #     download_links=dict(
+    #         human_raw="https://utexas.box.com/shared/static/pzvzuvmkla74kro84yw13uwjr2g89z8m.hdf5",
+    #         human_im="https://utexas.box.com/shared/static/mbi6011svy2zb436wsf2hhc337aduwmw.hdf5",
+    #     ),
+    # ),
 )
 
 
