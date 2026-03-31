@@ -46,29 +46,12 @@ from google.genai import types
 
 
 # ── 数据模型 ─────────────────────────────────────────────────────────────────
-FailureType = Literal[
-    "WRONG_TARGET", 
-    "BAD_APPROACH", 
-    "CONTACT_FAIL", 
-    "WRONG_MANIPULATION",
-    "WRONG_OBJECT",
-    "LOST_GRASP", 
-    "PLACE_FAIL", 
-    "COLLISION", 
-    "REACH_LIMIT", 
-    "FREEZE_OR_LOOP", 
-    "OTHER"
-]
-
 class VideoAnnotation(BaseModel):
 
     failure_position: int = Field(
         ...,
         ge=0,
         le=100,
-    )
-    failure_type: FailureType = Field(
-        ...,
     )
     perception: str = Field(
         ...,
@@ -96,9 +79,9 @@ You are observing a FAILED robot manipulation video in simulation. And your job 
 INPUT (will be supplied to you):
 
 - Task: '{instruction}'
-- Video: The video of the failed task. 
+- Video: The video of the failed task.
 
-The camera layout (each frame is a horizontal triptych, from left to right) in the video is: 
+The camera layout (each frame is a horizontal triptych, from left to right) in the video is:
 - hand (eye-in-hand camera view)
 - right (right agent (third-person) view)
 - left (left agent (third-person) view)
@@ -109,7 +92,6 @@ STRICT OUTPUT FORMAT (required):
 Return one valid JSON object with exactly these fields:
 {{
   "failure_position": "...",
-  "failure_type": "...",
   "perception": "...",
   "summary": "...",
   "reflection": "...",
@@ -123,9 +105,6 @@ WHAT TO INCLUDE IN EACH FIELD (content requirements):
 **failure_position**
 An integer from 0 to 100 representing the timeline percent where the FIRST failure happens. 0% = first frame, 100% = last frame.
 
-**failure_type**
-Pick exactly ONE type from the labels below for the failure.
-
 **perception**
 Analysis of the environment scene. You should ONLY focus on the critical objects related to the task. Include their attributes and spatial layout when necessary, such as color, position, shape, etc.
 
@@ -133,28 +112,13 @@ Analysis of the environment scene. You should ONLY focus on the critical objects
 The subtasks that have been executed BEFORE the failure.
 
 **reflection**
-Analysis of what subtask the robot is trying to do and why the failure happens. 
+Analysis of what subtask the robot is trying to do and why the failure happens.
 
 **plan**
 Subtasks for the remaining task. Begin with the subtask for recovery.
 
 **next_subtask**
-The immediate next subtask to be executed for recovery. 
-
-==========
-LABELS FOR FAILURE_TYPE (pick ONE):
-
-- WRONG_TARGET: wrong object/instance manipulated
-- BAD_APPROACH: correct target, but approach/pose wrong
-- CONTACT_FAIL: contact happens but no effective grasp formed
-- WRONG_MANIPULATION: wrong direction/force for manipulation
-- WRONG_OBJECT: wrong object identity vs task (distinct instance/type confusion)
-- LOST_GRASP: stable hold lost before task completion
-- PLACE_FAIL: transport OK, failure at final placement
-- COLLISION: unintended collision blocks motion
-- REACH_LIMIT: repeated failure to reach due to limits
-- FREEZE_OR_LOOP: freeze, hang, or repetitive micro-motions
-- OTHER: none of the above, describe in your own words.
+The immediate next subtask to be executed for recovery.
 
 ==========
 RULES/SAFEGUARDS:
@@ -168,7 +132,6 @@ EXAMPLE OUTPUT:
 
 {{
     "failure_position": 25,
-    "failure_type": "BAD_APPROACH",
     "perception": "Kitchen counter scene with a coffee machine on the counter. The upper cabinet door is open. The robot arm is at the front of the machine; the gripper is grasping the mug and is near the dispenser spout. But the mug is not upright on the tray yet and the gripper is about to lose contact with the mug.",
     "summary": "Move the arm to the cabinet; Grasp the mug in the cabinet; Move the mug to the drip tray of the coffee machine.",
     "reflection": "The robot is trying to 'Place the mug on the drip tray'. However, the gripper was tilted left and a little low and mug-tray collision was detected. The grip is slipping, leading to failed placement in the future.",
@@ -559,10 +522,9 @@ def main():
                 pct_str_trimmed = f"{trim_info['failure_position_trimmed']}%"
                 pct_str_original = f"{failure_position_original:.1f}%"
                 time_str = f"{failure_time:.2f}s" if failure_time is not None else "N/A"
-                failure_type_str = annotation.failure_type
 
                 # 输出显示：(裁剪后%, 原始%, 秒数)
-                print(f"         step={failure_step:3d} (trimmed {pct_str_trimmed:4s} → original {pct_str_original:6s}, {time_str:8s}) type={failure_type_str:20s} | {annotation.perception[:60]}...")
+                print(f"         step={failure_step:3d} (trimmed {pct_str_trimmed:4s} → original {pct_str_original:6s}, {time_str:8s}) | {annotation.perception[:60]}...")
 
                 task_results.append({
                     "episode_id": ep_id,
@@ -575,7 +537,6 @@ def main():
                     "failure_position_original_percent": failure_position_original,
                     'failure_step': failure_step,
                     "failure_time_sec": failure_time,
-                    "failure_type": annotation.failure_type,
                     "perception": annotation.perception,
                     "summary": annotation.summary,
                     "reflection": annotation.reflection,
