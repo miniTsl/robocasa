@@ -14,7 +14,7 @@ from robocasa.utils.dataset_registry import get_ds_path
 from termcolor import colored
 from robocasa.eval.simulate_server import SimulateServer
 
-# python -m robocasa.eval.simulator_replay_rollout --port 8010 --save_actions --recover_json /home/zhangxinyue/robocasa/robocasa/eval/ep.json --replay_id 0
+# python -m robocasa.eval.simulator_replay_rollout --port 8011 --save_actions --recover_json /home/zhangxinyue/robocasa/robocasa/eval/ep.json --replay_id 0
 single_stage_tasks=[
     "PnPCounterToCab",
     "PnPCabToCounter",
@@ -287,11 +287,12 @@ class Simulator:
         first = True
         while i + self.chunk_length <= env.horizon:
             # get the response from the server
-            if first:
-                model_response = self.server.get_response_from_server(obs, instruction, i, full_reasoning=full_reasoning, sampled_history_images=sampled_history_images)
-                first = False
-            else:
-                model_response = self.server.get_response_from_server(obs, instruction, i)
+            # if first:
+            #     model_response = self.server.get_response_from_server(obs, instruction, i, full_reasoning=full_reasoning, sampled_history_images=sampled_history_images)
+            #     first = False
+            # else:
+            #     model_response = self.server.get_response_from_server(obs, instruction, i)
+            model_response = self.server.get_response_from_server(obs, instruction, i)
             predict_action = model_response["predict_action"]
 
             inference_idx = i

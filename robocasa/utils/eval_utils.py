@@ -4,7 +4,7 @@ from robocasa.utils.dataset_registry import (
     MULTI_STAGE_TASK_DATASETS,
 )
 from robocasa.scripts.playback_dataset import get_env_metadata_from_dataset
-from robosuite import load_controller_config
+from robosuite.controllers import load_composite_controller_config
 import os
 import robosuite
 import imageio
@@ -16,7 +16,7 @@ from termcolor import colored
 def create_eval_env(
     env_name,
     # robosuite-related configs
-    robots="PandaMobile",
+    robots="PandaOmron", #"PandaMobile",
     controllers="OSC_POSE",
     camera_names=[
         "robot0_agentview_left",
@@ -32,12 +32,17 @@ def create_eval_env(
     randomize_cameras=False,
     layout_and_style_ids=((1, 1), (2, 2), (4, 4), (6, 9), (7, 10)),
 ):
-    controller_configs = load_controller_config(default_controller=controllers)
+    #controller_configs = load_controller_config(default_controller=controllers)
+    controller_config = load_composite_controller_config(
+        controller=None,
+        robot=robots if isinstance(robots, str) else robots[0],
+    )
+
 
     env_kwargs = dict(
         env_name=env_name,
         robots=robots,
-        controller_configs=controller_configs,
+        controller_configs=controller_config,
         camera_names=camera_names,
         camera_widths=camera_widths,
         camera_heights=camera_heights,

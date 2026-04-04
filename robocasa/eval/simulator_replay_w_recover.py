@@ -475,7 +475,7 @@ if __name__=="__main__":
     parser.add_argument(
         "--recover_attempts",
         type=int,
-        default=50,
+        default=20,
         help="Number of recovery attempts on the same trajectory",
     )
 

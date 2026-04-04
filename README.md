@@ -18,6 +18,7 @@
 ![典型eval结果](eval_tree/eval_tree1.png)
 ![典型eval结果](eval_tree/eval_tree2.png)
 
+与其他工作对齐的评测脚本，执行`python -m robocasa.eval.simulator_eval --port 8010`  
 
 # RoboCasa: Large-Scale Simulation of Everyday Tasks for Generalist Robots
 <!-- ![alt text](https://github.com/UT-Austin-RPL/maple/blob/web/src/overview.png) -->

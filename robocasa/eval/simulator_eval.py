@@ -16,6 +16,7 @@ from termcolor import colored
 from collections import OrderedDict
 from robocasa.eval.simulate_server import SimulateServer
 import pdb
+from robocasa.utils.eval_utils import create_eval_env
 
 single_stage_tasks=[
     # "PnPCounterToCab",
@@ -23,26 +24,26 @@ single_stage_tasks=[
     # "PnPCounterToSink",
     # "PnPSinkToCounter",
     # "PnPCounterToMicrowave",
-    # "PnPMicrowaveToCounter",
-    # "PnPCounterToStove",
-    # "PnPStoveToCounter",
-    # "OpenSingleDoor",
-    # # "CloseSingleDoor",   # File damaged
-    # "OpenDoubleDoor",
+    "PnPMicrowaveToCounter",
+    "PnPCounterToStove",
+    "PnPStoveToCounter",
+    "OpenSingleDoor",
+    # "CloseSingleDoor",   # File damaged
+    "OpenDoubleDoor",
     "CloseDoubleDoor",
     "OpenDrawer",
     "CloseDrawer",
-    # "TurnOnSinkFaucet",
-    # "TurnOffSinkFaucet",
-    # "TurnSinkSpout",
-    # "TurnOnStove",
-    # "TurnOffStove",
-    # "CoffeeSetupMug",
-    # "CoffeeServeMug",
-    # "CoffeePressButton",
-    # "TurnOnMicrowave",
-    # "TurnOffMicrowave",
-    # "NavigateKitchen",
+    "TurnOnSinkFaucet",
+    "TurnOffSinkFaucet",
+    "TurnSinkSpout",
+    "TurnOnStove",
+    "TurnOffStove",
+    "CoffeeSetupMug",
+    "CoffeeServeMug",
+    "CoffeePressButton",
+    "TurnOnMicrowave",
+    "TurnOffMicrowave",
+    "NavigateKitchen",
 ]
 multi_stage_tasks=[
     "ArrangeVegetables",
@@ -52,13 +53,11 @@ multi_stage_tasks=[
     "PrepareCoffee",
 ]
 class Simulator:
-    def __init__(self, task, num_episodes, num_trials, save_dir, port, episode_length_factor, chunk_length, camera_height, camera_width, eval_mode="first", save_images=True, save_actions=True):
+    def __init__(self, task, num_trials, save_dir, port, episode_length_factor, chunk_length, camera_height, camera_width, save_images=True, save_actions=True):
         self.task=task
-        self.num_episodes=num_episodes
         self.num_trials=num_trials
         self.save_dir=save_dir
         self.port=port
-        self.eval_mode = eval_mode
         self.dataset_path=get_ds_path(task, ds_type="human_im")
         self.episode_length_factor=episode_length_factor
         self.chunk_length=chunk_length
@@ -171,12 +170,11 @@ class Simulator:
     def _get_sim_render_image(self, env, camera_name, height, width):
         return env.sim.render(height=height, width=width, camera_name=camera_name)[::-1]
     
-    def _run_single_trial(self, env, states_ref, initial_state, actions_ref, episode_index, trial_index, video_path, save_images=True):
+    def _run_single_trial(self, env, trial_index, video_path, save_images=True):
         """each trial"""
 
         # reference trajectory length from the dataset
-        traj_len = actions_ref.shape[0]
-        ep_meta = json.loads(initial_state["ep_meta"])
+        ep_meta = env.get_ep_meta()
         lang = ep_meta.get("lang", None)
         if lang is not None:
             print(colored(f"Instruction: {lang}", "light_blue"))
@@ -203,22 +201,15 @@ class Simulator:
         txt_path = os.path.splitext(video_path)[0] + ".txt"
         inference_info_lines = []
 
-        # set the environment to initial state. Notice there is another env.sim reset after env.reset
-        self._reset_to(env, initial_state)
         # print the shape of the images from the eye-in-hand camera
         # print(colored(f"Observation shape: {init_obs['robot0_eye_in_hand_image'].shape}", "light_blue")) # [128, 128, 3]
-        
-        action_deviation = 0.0
-        state_deviation = 0.0
         pred_actions = []  # actions actually passed to env.step
         success = False
-        step_action_mse_list = []
-        step_state_mse_list = []
 
         i = 0
         # obs = {}
         # Get the real initial observation
-        obs = env._get_observations(force_update=True)   # the images in _get_observations() is already [128, 128, 3]
+        obs= env.reset()   # the images in _get_observations() is already [128, 128, 3]
         while i + self.chunk_length <= env.horizon:
             # get the response from the server
             model_response = self.server.get_response_from_server(obs, instruction, i)
@@ -254,18 +245,8 @@ class Simulator:
                 # step the environment with the action(12,)
                 obs, reward, done, info = env.step(action)
 
-                # compute norms when the predicted action length < groundtruth action length
-                if i < traj_len - 1:
-                    step_action_mse = np.mean((action - actions_ref[i]) ** 2)
-                    action_deviation += step_action_mse
-                    step_action_mse_list.append((i, step_action_mse))  # (step, action_mse)
-                    state_playback = np.array(env.sim.get_state().flatten())
-                    step_state_mse = np.mean((states_ref[i + 1] - state_playback) ** 2)
-                    state_deviation += step_state_mse
-                    step_state_mse_list.append((i, step_state_mse))  # (step, state_mse)
-
                 if i % 100 == 0:
-                    print(f"Executing step {i} of episode {episode_index + 1}, trial {trial_index + 1}")
+                    print(f"Executing step {i} of trial {trial_index + 1}")
                 # check if succeeds
                 if not success and env._check_success():
                     success = True
@@ -307,20 +288,6 @@ class Simulator:
             for line in inference_info_lines:
                 f_txt.write(line + "\n")
 
-        action_mse_txt_path = os.path.splitext(video_path)[0] + "_action_mse.txt"
-        with open(action_mse_txt_path, "w", encoding="utf-8") as f_action_mse:
-            f_action_mse.write("step, action_mse\n")
-            for step, mse in step_action_mse_list:
-                f_action_mse.write(f"{step},{mse}\n")
-        print(colored(f"Step-wise action MSE saved to: {action_mse_txt_path}", "light_blue"))
-
-        state_mse_txt_path = os.path.splitext(video_path)[0] + "_state_mse.txt"
-        with open(state_mse_txt_path, "w", encoding="utf-8") as f_state_mse:
-            f_state_mse.write("step, state_mse\n")
-            for step, mse in step_state_mse_list:
-                f_state_mse.write(f"{step},{mse}\n")
-        print(colored(f"Step-wise state MSE saved to: {state_mse_txt_path}", "light_blue"))
-
         # summary
         actual_length = i + 1 if success else i
         if success:
@@ -328,62 +295,27 @@ class Simulator:
         else:
             print(colored(f"Exceeds max steps {env.horizon}, task fails", "red"))
 
-        action_mse = action_deviation / min(actual_length, traj_len)
-        state_mse = state_deviation / min(actual_length, traj_len)
-        print(colored(f"Action MSE: {action_mse}", "yellow"))
-        print(colored(f"State MSE: {state_mse}", "yellow"))
-
-        if self.plot_comparison:
-            pred_traj_np = np.array(pred_actions[:min(len(pred_actions), actions_ref.shape[0])])
-            gt_traj_np = actions_ref[:min(len(pred_actions), actions_ref.shape[0]), :]
-            self.plot_action_comparison(pred_traj_np, gt_traj_np)
-
         return {
             "trial_index": trial_index,
-            "gt_length": traj_len,
             "actual_length": actual_length,
-            "action_mse": action_mse,
-            "state_mse": state_mse,
             "success": 1 if success else 0,
             "instruction": instruction
         }
 
     def run_simulation(self):
-        demos = self._get_demo_list()
-        total_demos = len(demos)
-        
-        # determine which episodes to evaluate
-        if self.num_episodes <= 0 or self.num_episodes > total_demos:
-            num_to_eval = total_demos
-        else:
-            num_to_eval = self.num_episodes
-        
-        if self.eval_mode == "last":
-            start_idx = max(0, total_demos - num_to_eval)
-            selected_indices = list(range(start_idx, total_demos))
-        else: # default to "first"
-            selected_indices = list(range(num_to_eval))
-
-        print(colored(f"\nEvaluating task {self.task}, total demos in dataset: {total_demos}, evaluating {len(selected_indices)} episode(s) (mode: {self.eval_mode})", "light_blue"))
+        print(colored(f"\nEvaluating task {self.task}", "light_blue"))
         
         task_dir = os.path.join(self.save_dir, self.task)
         os.makedirs(task_dir, exist_ok=True)
         
         # task level
         all_results = []
-        # 保存每个 episode 的 language instruction
-        episode_instructions = []
         
         # create task level CSV file
         task_csv_path = os.path.join(task_dir, "avg.csv")
-        # 在 task 级别的 CSV 中也加入 instruction 字段
         task_csv_headers = [
-            "episode_index",
             "trial_index",
-            "gt_length",
             "actual_length",
-            "action_mse",
-            "state_mse",
             "success",
             "instruction",
         ]
@@ -392,92 +324,39 @@ class Simulator:
             task_csv_writer = csv.DictWriter(task_csv_file, fieldnames=task_csv_headers)
             task_csv_writer.writeheader()
             
-            # outer loop: iterate over selected episodes
-            for loop_idx, episode_index in enumerate(selected_indices):
-                print(colored(f"\n{'='*60}", "light_blue"))
-                print(colored(f"Starting Episode {loop_idx + 1}/{len(selected_indices)} (Dataset Index: {episode_index})", "light_blue"))
-                print(colored(f"{'='*60}", "light_blue"))
-                
-                # create episode directory
-                episode_dir = os.path.join(task_dir, f"episode_{episode_index}")
-                os.makedirs(episode_dir, exist_ok=True)
-                
-                # episode level CSV file
-                episode_csv_path = os.path.join(episode_dir, f"episode_{episode_index}_trials.csv")
-                # 在 episode 级 CSV 中增加一列 instruction，保存该 episode 的 language instruction
-                episode_csv_headers = ["trial_index", "gt_length", "actual_length", "action_mse", "state_mse", "success", "instruction"]
-                episode_results = []
-                # 当前 episode 的 instruction（同一 episode 的所有 trial 应该相同）
-                episode_instruction = ""
-                
-                with open(episode_csv_path, "w", newline="") as episode_csv_file:
-                    episode_csv_writer = csv.DictWriter(episode_csv_file, fieldnames=episode_csv_headers)
-                    episode_csv_writer.writeheader()
-                    
-                    # inner loop: iterate over trials
-                    episode_name, env, states_ref, initial_state, actions_ref = self._init_env(episode_index)
-                    for trial_index in range(self.num_trials):
-                        print(colored(f"\n--- Episode {episode_index + 1}, Trial {trial_index + 1}/{self.num_trials} ---", "light_blue"))
-                        # video path
-                        video_path = os.path.join(episode_dir, f"trial_{trial_index}.mp4")
-                        # run single trial
-                        result = self._run_single_trial(
-                            env, states_ref, initial_state, actions_ref,
-                            episode_index, trial_index, video_path,
-                            save_images=self.save_images
-                        )
-                        
-                        # 记录当前 episode 的 instruction（同一 episode 的所有 trial 应相同）
-                        if not episode_instruction and result["instruction"]:
-                            episode_instruction = result["instruction"]
-                        
-                        # save to episode CSV
-                        episode_row = {k: result[k] for k in episode_csv_headers}
-                        episode_csv_writer.writerow(episode_row)
-                        episode_csv_file.flush()
-                        
-                        # save to task CSV
-                        task_row = {"episode_index": episode_index, **episode_row}
-                        task_csv_writer.writerow(task_row)
-                        task_csv_file.flush()
-                        
-                        episode_results.append(result)
-                        all_results.append({**result, "episode_index": episode_index})
-                        
-                        # close the environment
-                        env.close()
-                
-                # print episode summary
-                episode_success_rate = sum(r["success"] for r in episode_results) / len(episode_results)
-                print(colored(f"\nEpisode {episode_index} Summary: Success Rate = {episode_success_rate:.2%}", "green"))
-                
-                # 将当前 episode 的 instruction 保存到列表中（若为空，则存空字符串）
-                episode_instructions.append(episode_instruction)
-                
+            env = create_eval_env(env_name=self.task, seed=0)
+            for trial_index in range(self.num_trials):
+                print(colored(f"\n--- Trial {trial_index + 1}/{self.num_trials} ---", "light_blue"))
+                # video path
+                video_path = os.path.join(task_dir, f"trial_{trial_index}.mp4")
+                # run single trial
+                result = self._run_single_trial(
+                    env, trial_index, video_path,
+                    save_images=self.save_images
+                )
+
+                # save to task CSV
+                task_row = {k: result[k] for k in task_csv_headers}
+                task_csv_writer.writerow(task_row)
+                task_csv_file.flush()
+
+                all_results.append(result)
+
+            env.close()
 
         # calculate task level statistics
         total_trials = len(all_results)
-        avg_gt_length = sum(r["gt_length"] for r in all_results) / total_trials
         avg_actual_length = sum(r["actual_length"] for r in all_results) / total_trials
         avg_success_rate = sum(r["success"] for r in all_results) / total_trials
-        avg_action_mse = sum(r["action_mse"] for r in all_results) / total_trials
-        avg_state_mse = sum(r["state_mse"] for r in all_results) / total_trials
         
         # save task level JSON summary file
         task_summary = {
             "task": self.task,
-            "eval_mode": self.eval_mode,
-            # 每个 episode 对应一个 instruction
-            "instructions": episode_instructions,
-            "num_episodes": len(selected_indices),
-            "num_trials_per_episode": self.num_trials,
+            "num_trials": self.num_trials,
             "total_trials": total_trials,
             "episode_length_factor": self.episode_length_factor,
-            "avg_gt_length": avg_gt_length,
             "avg_actual_length": avg_actual_length,
-            "avg_success_rate": avg_success_rate,
-            "avg_action_mse": avg_action_mse,
-            "avg_state_mse": avg_state_mse
+            "avg_success_rate": avg_success_rate
         }
         
         task_json_path = os.path.join(task_dir, f"{self.task}_summary.json")
@@ -487,13 +366,10 @@ class Simulator:
         print(f"\n{'='*60}")
         print(colored(f"Task {self.task} Evaluation Complete!", "green"))
         print((f"{'='*60}"))
-        print(f"Total Episodes: {len(selected_indices)} (Mode: {self.eval_mode})")
-        print(f"Trials per Episode: {self.num_trials}")
         print(f"Total Trials: {total_trials}")
-        print(f"Average Action MSE: {avg_action_mse:.4f}")
-        print(f"Average State MSE: {avg_state_mse:.4f}")
+        print(f"Average Trial Length: {avg_actual_length:.2f}")
         print(f"Results saved to: {task_dir}")
-        print(colored(f"Average Success Rate: {avg_success_rate:.2f}", "green"))
+        print(colored(f"Average Success Rate: {avg_success_rate:.2%}", "green"))
         
 
     def plot_action_comparison(self, pred_traj_np, gt_traj_np):
@@ -526,18 +402,15 @@ class Simulator:
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    # number of episodes to evaluate for each task, default to evaluate all episodes
-    parser.add_argument("--num_episodes",type=int, default=3)
     # number of test times for each episode
-    parser.add_argument("--num_trials",type=int, default=1)
+    parser.add_argument("--num_trials",type=int, default=50)
     # eposide legth factor, default to x times the original eposide length
     parser.add_argument("--episode_length_factor", type=float, default=2)
     # chunk length for action choice, default to 20
     parser.add_argument("--chunk_length", type=int, default=20)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--save_dir", type=str, default="/home/zhangxinyue/robocasa/eval_trials/0311_debug/1task_stage3_resubase_ood")
+    parser.add_argument("--save_dir", type=str, default="/home/zhangxinyue/robocasa/eval_trials/0303_debug/pi05_baseline_simple_eval")
     parser.add_argument("--save_images", action="store_true", help="Save images for each step in trial folders")
-    parser.add_argument("--eval_mode", type=str, default="first", choices=["first", "last"], help="Evaluation mode: 'first' for first N episodes, 'last' for last N episodes")
     parser.add_argument("--save_actions", action="store_true", help="Save executed actions passed to env.step for each trial")
     
     args = parser.parse_args()
@@ -550,6 +423,6 @@ if __name__=="__main__":
 
     
     for task in single_stage_tasks:
-        server = Simulator(task, args.num_episodes, args.num_trials, args.save_dir, args.port, args.episode_length_factor, args.chunk_length, camera_height, camera_width, eval_mode=args.eval_mode, save_images=args.save_images, save_actions=args.save_actions)
+        server = Simulator(task, args.num_trials, args.save_dir, args.port, args.episode_length_factor, args.chunk_length, camera_height, camera_width, save_images=args.save_images, save_actions=args.save_actions)
         server.run_simulation()
         server.server.close()
