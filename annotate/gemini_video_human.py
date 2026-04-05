@@ -1,35 +1,5 @@
-#!/usr/bin/env python3
 """
-Gemini Video Failure Annotator
-===============================
-使用 Gemini 视频理解 API + 结构化输出标注 RoboCasa 失败视频。
-
-视频为三联画：单帧内从左到右子画面顺序为 hand → right → left；failure_percent 表示根因时刻 a（非后果时刻 b）。
-
-特点:
-  - 支持本地视频上传（Gemini File API）
-  - 可调节视频分析帧率 (FPS)
-  - 结构化输出（Pydantic + response_schema）
-  - 输出结果保存为 JSON
-  - 支持断点续跑
-
-用法:
-  # 基本用法
-  python check_gemini.py \
-      --video_dir /path/to/videos \
-      --output annotations_gemini.json
-
-  # 自定义 FPS 和模型
-  python check_gemini.py \
-      --video_dir /path/to/videos \
-      --fps 5 \
-      --model gemini-3-flash-preview
-
-环境变量:
-  GEMINI_API_KEY  — Gemini API Key (from ai.google.dev)
-
-依赖:
-  pip install google-genai pydantic
+人为标注出错时间点，让大模型标注出错处的reasoning
 """
 
 from pydantic import BaseModel, Field
@@ -53,6 +23,25 @@ class VideoAnnotation(BaseModel):
         ge=0,
         le=100,
     )
+    perception: str = Field(
+        ...,
+    )
+    summary: str = Field(
+        ...,
+    )
+    reflection: str = Field(
+        ...,
+    )
+    plan: str = Field(
+        ...,
+    )
+    next_subtask: str = Field(
+        ...,
+    )
+
+
+class VideoAnnotationGTFailTime(BaseModel):
+    """当已知 gt_fail_time 时使用的数据模型，无需标注 failure_position"""
     perception: str = Field(
         ...,
     )
@@ -140,25 +129,97 @@ EXAMPLE OUTPUT:
 }}
 """
 
+# ── 提示词（已知出错时间点） ─────────────────────────────────────────────────
+PROMPT_WITH_GT_FAILTIME = """You are an expert of robot manipulation task analysis.
+==========
+You are observing a FAILED robot manipulation video in simulation. And your job is to analyze the failure at the SPECIFIED time position.
+
+==========
+INPUT (will be supplied to you):
+
+- Task: '{instruction}'
+- Video: The video of the failed task (duration: {trimmed_duration:.1f}s).
+- FAILURE TIME: The FIRST failure happens at {gt_fail_time:.2f}s ({failure_position_in_trimmed:.1f}% of the trimmed video).
+
+The camera layout (each frame is a horizontal triptych, from left to right) in the video is:
+- hand (eye-in-hand camera view)
+- right (right agent (third-person) view)
+- left (left agent (third-person) view)
+
+==========
+STRICT OUTPUT FORMAT (required):
+
+Return one valid JSON object with exactly these fields:
+{{
+  "perception": "...",
+  "summary": "...",
+  "reflection": "...",
+  "plan": "...",
+  "next_subtask": "..."
+}}
+
+==========
+WHAT TO INCLUDE IN EACH FIELD (content requirements):
+
+**perception**
+Analysis of the environment scene at the failure time ({gt_fail_time:.2f}s). You should ONLY focus on the critical objects related to the task. Include their attributes and spatial layout when necessary, such as color, position, shape, etc.
+
+**summary**
+The subtasks that have been executed BEFORE the failure at {gt_fail_time:.2f}s.
+
+**reflection**
+Analysis of what subtask the robot is trying to do and why the failure happens at the specified time.
+
+**plan**
+Subtasks for the remaining task. Begin with the subtask for recovery.
+
+**next_subtask**
+The immediate next subtask to be executed for recovery.
+
+==========
+RULES/SAFEGUARDS:
+
+• Do not hallucinate: never assert the presence of something not visible in the video. Use words like "possibly", "uncertain", "not sure", etc. to express your uncertainty.
+• Output a valid JSON with only the above fields — no extra text or markdown.
+• Keep the perception, reflection, plan, and next_subtask fields in the JSON as specific, concise and plain words.
+• Focus your analysis on the specified failure time: {gt_fail_time:.2f}s.
+
+==========
+EXAMPLE OUTPUT:
+
+{{
+    "perception": "Kitchen counter scene with a coffee machine on the counter. The upper cabinet door is open. The robot arm is at the front of the machine; the gripper is grasping the mug and is near the dispenser spout. But the mug is not upright on the tray yet and the gripper is about to lose contact with the mug.",
+    "summary": "Move the arm to the cabinet; Grasp the mug in the cabinet; Move the mug to the drip tray of the coffee machine.",
+    "reflection": "The robot is trying to 'Place the mug on the drip tray'. However, the gripper was tilted left and a little low and mug-tray collision was detected. The grip is slipping, leading to failed placement in the future.",
+    "plan": "Grasps the mug and adjust its position for stable placement; Move the gripper to the start button; Press the start button.",
+    "next_subtask": "Grasps the mug and adjust its position for stable placement."
+}}
+"""
+
 # ── 工具函数 ────────────────────────────────────────────────────────────────
-def load_episodes(jsonl_path):
-    """从 metrics_log.jsonl 读取 episode 元数据，按 episode_id 排序"""
+def load_episodes(jsonl_path, num_videos_per_folder=None):
+    """从 metrics_log.jsonl 读取 episode 元数据，按 episode_id 排序
+
+    Args:
+        jsonl_path: jsonl 文件路径
+        num_videos_per_folder: 每个文件夹内选择的视频数，从 id 从小往大选。None 表示全选
+    """
     episodes = []
     with open(jsonl_path) as f:
         for line in f:
             if not line.strip():
                 continue
             ep = json.loads(line.strip())
-            # 支持两种格式：
-            # 1. 有 "success" 字段：读取 success=false 的 episode
-            # 2. 无 "success" 字段：读取所有 episode（视为失败视频）
-            if "success" in ep:
-                if not ep["success"]:
-                    episodes.append(ep)
-            else:
-                # 没有 success 字段，假设这个 episode 就是失败的
+            if not ep.get("success", False):
                 episodes.append(ep)
-    return sorted(episodes, key=lambda e: e.get("episode_id", 0))
+
+    episodes = sorted(episodes, key=lambda e: e.get("episode_id", 0))
+
+    # 如果指定了 num_videos_per_folder，只取前 num_videos_per_folder 个
+    if num_videos_per_folder is not None and num_videos_per_folder > 0:
+        episodes = episodes[:num_videos_per_folder]
+
+    return episodes
 
 
 def match_videos_to_episodes(task_dir, episodes):
@@ -177,7 +238,7 @@ def get_video_duration(video_path):
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1:nokey=1", str(video_path)],
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
             capture_output=True, text=True, timeout=10
         )
         return float(result.stdout.strip())
@@ -189,9 +250,6 @@ def read_video_bytes(video_path):
     """读取视频文件为字节"""
     with open(video_path, "rb") as f:
         return f.read()
-
-
-
 
 def trim_video_to_first_half(video_path, trim_percent=0.5):
     """
@@ -304,36 +362,25 @@ def build_video_part(video_path, fps=1, trim_percent=0.5):
     return video_part, original_duration, trimmed_duration, actual_trim_percent
 
 
-def annotate_episode(client, model, instruction, video_path, episode_length, fps=1, thinking_level="medium", trim_percent=0.5):
+def annotate_episode(client, model, instruction, video_path, episode_data, fps=1, thinking_level="medium", trim_percent=0.5):
     """
     调用 Gemini API 对单个失败 episode 进行标注。
 
-    注意：
-    - 视频会被裁剪到前 trim_percent（默认50%）
-    - failure_position 百分比是相对于「裁剪后」的视频
-    - 需要转换回「原始」视频的步数和时间
+    当 episode_data 中有 gt_fail_time 时，使用带有 ground truth 出错时间的 prompt，
+    只需要标注 reasoning，无需标注 failure_position。
 
     Args:
         client: Gemini 客户端
         model: 模型名称
         instruction: 任务指令
         video_path: 视频文件路径
-        episode_length: 原始 episode 的总步数
+        episode_data: episode 元数据字典，包含 actual_length 和 gt_fail_time（秒）
         fps: 视频分析帧率
         thinking_level: 思考深度
         trim_percent: 保留视频的百分比
 
     Returns:
-        (annotation, failure_step_original, failure_time_original, raw_response_json, trim_info)
-        或 (None, None, None, error_str, None)
-
-        trim_info = {
-            'original_duration': 原始视频时长,
-            'trimmed_duration': 裁剪后视频时长,
-            'trim_percent': 裁剪百分比,
-            'failure_position_trimmed': 模型输出的百分比（相对裁剪后）,
-            'failure_position_original': 转换后的百分比（相对原始）
-        }
+        (annotation, failure_step, raw_response_json, trim_info, has_gt_fail_time)
     """
     try:
         # 构建视频部分（包括裁剪）
@@ -341,52 +388,72 @@ def annotate_episode(client, model, instruction, video_path, episode_length, fps
             video_path, fps, trim_percent=trim_percent
         )
 
-        # 构建完整内容
-        prompt_text = PROMPT.format(instruction=instruction)
+        gt_fail_time = episode_data.get("gt_fail_time")
+        has_gt_fail_time = gt_fail_time is not None
+        ep_length = episode_data["actual_length"]
+
+        if has_gt_fail_time:
+            # 计算 gt_fail_time 在裁剪后视频中的百分比
+            if trimmed_duration and trimmed_duration > 0:
+                failure_position_in_trimmed = (gt_fail_time / trimmed_duration * 100)
+            else:
+                failure_position_in_trimmed = 0
+
+            prompt_text = PROMPT_WITH_GT_FAILTIME.format(
+                instruction=instruction,
+                gt_fail_time=gt_fail_time,
+                trimmed_duration=trimmed_duration or 0,
+                failure_position_in_trimmed=failure_position_in_trimmed
+            )
+            response_schema = VideoAnnotationGTFailTime
+        else:
+            prompt_text = PROMPT.format(instruction=instruction)
+            response_schema = VideoAnnotation
 
         # 构建配置
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=VideoAnnotation,
+            response_schema=response_schema,
             temperature=0.35,
             thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
         )
 
-        # 调用 Gemini API，使用结构化输出
+        # 调用 Gemini API
         response = client.models.generate_content(
             model=model,
             contents=[video_part, prompt_text],
             config=config,
         )
 
-        # 获取结构化结果
-        annotation: VideoAnnotation = response.parsed
+        annotation = response.parsed
 
-        # 重要：模型返回的 failure_position 是相对于「裁剪后」的视频百分比
-        # 需要转换回「原始」视频的百分比
-        failure_position_trimmed = annotation.failure_position  # 相对裁剪后视频 (0-100%)
-        failure_position_original = failure_position_trimmed * actual_trim_percent  # 相对原始视频 (0-100%)
+        if has_gt_fail_time:
+            # 使用 gt_fail_time 的百分比（相对原始视频）
+            failure_position_original = (gt_fail_time / original_duration * 100) if original_duration else 0
+            failure_step = round(failure_position_original / 100.0 * ep_length)
+            failure_position_trimmed = None
+        else:
+            # 转换模型输出的百分比（相对裁剪后）到原始视频
+            failure_position_trimmed = annotation.failure_position
+            failure_position_original = failure_position_trimmed * actual_trim_percent
+            failure_step = round(failure_position_original / 100.0 * ep_length)
 
-        # 计算故障步数（相对原始 episode）
-        failure_step = round(failure_position_original / 100.0 * episode_length)
-
-        # 获取原始 JSON 响应
         raw_json = response.text if hasattr(response, 'text') else json.dumps(annotation.model_dump())
 
-        # 构建 trim_info 用于输出显示
         trim_info = {
             'original_duration': original_duration,
             'trimmed_duration': trimmed_duration,
             'trim_percent': actual_trim_percent,
             'failure_position_trimmed': failure_position_trimmed,
             'failure_position_original': failure_position_original,
+            'has_gt_fail_time': has_gt_fail_time,
         }
 
-        return annotation, failure_step, raw_json, trim_info
+        return annotation, failure_step, raw_json, trim_info, has_gt_fail_time
 
     except Exception as e:
         import traceback
-        return None, None, str(e) + "\n" + traceback.format_exc(), None
+        return None, None, str(e) + "\n" + traceback.format_exc(), None, False
 
 
 def cleanup_video_file(client, file_id):
@@ -412,6 +479,8 @@ def main():
                         help="输出 JSON 文件路径 (默认: annotations_gemini.json)")
     parser.add_argument("--tasks", nargs="*", default=None,
                         help="只标注指定任务 (默认: 标注全部)")
+    parser.add_argument("--num_videos_per_folder", type=int, default=None,
+                        help="每个文件夹内选择的视频数，从 id 从小往大选。None 或 0 表示全选 (默认: None)")
     parser.add_argument("--model", type=str, default="gemini-3-flash-preview",
                         help="Gemini 模型名 (默认: gemini-3-flash-preview)")
     parser.add_argument("--fps", type=float, default=1,
@@ -466,7 +535,7 @@ def main():
             continue
 
         # 加载 episode 元数据
-        fail_eps = load_episodes(jsonl)
+        fail_eps = load_episodes(jsonl, num_videos_per_folder=args.num_videos_per_folder)
         ep_to_video = match_videos_to_episodes(task_dir, fail_eps)
 
         print(f"\n{'='*70}")
@@ -487,29 +556,21 @@ def main():
             # 检查视频文件是否存在
             video_path = ep_to_video.get(ep_id)
             if not video_path or not video_path.exists():
-                ep_length = ep.get("length") or ep.get("actual_length", 1)
                 print(f"  ep{ep_id:3d}: video not found at {video_path}")
-                task_results.append({
-                    "episode_id": ep_id,
-                    "length": ep_length,
-                    "gemini_step": None,
-                    "gemini_reply": "video not found",
-                })
                 continue
 
             # 获取视频时长
             duration = get_video_duration(video_path)
             instruction = ep.get("instruction", "N/A")
 
-            # 兼容两种字段名：length 或 actual_length
-            ep_length = ep.get("length") or ep.get("actual_length", 1)
+            ep_length = ep["actual_length"]
             duration_str = f"{duration:.1f}s" if duration is not None else "?s"
             print(f"  ep{ep_id:3d} (len={ep_length:3d}, {duration_str})")
             print(f"         instruction: {instruction[:60]}...")
 
             # 调用 Gemini 标注（视频会被裁剪）
-            annotation, failure_step, reply, trim_info = annotate_episode(
-                client, args.model, instruction, video_path, ep_length, fps=args.fps,
+            annotation, failure_step, reply, trim_info, has_gt_fail_time = annotate_episode(
+                client, args.model, instruction, video_path, ep, fps=args.fps,
                 thinking_level=args.thinking_level, trim_percent=args.trim_percent
             )
 
@@ -519,12 +580,17 @@ def main():
                 failure_position_original = trim_info['failure_position_original']
                 failure_time = round(failure_position_original / 100.0 * duration, 2) if duration else None
 
-                pct_str_trimmed = f"{trim_info['failure_position_trimmed']}%"
-                pct_str_original = f"{failure_position_original:.1f}%"
-                time_str = f"{failure_time:.2f}s" if failure_time is not None else "N/A"
-
-                # 输出显示：(裁剪后%, 原始%, 秒数)
-                print(f"         step={failure_step:3d} (trimmed {pct_str_trimmed:4s} → original {pct_str_original:6s}, {time_str:8s}) | {annotation.perception[:60]}...")
+                if has_gt_fail_time:
+                    # 使用 gt_fail_time
+                    pct_str = f"{failure_position_original:.1f}%"
+                    time_str = f"{ep.get('gt_fail_time'):.2f}s (gt)"
+                    print(f"         step={failure_step:3d} ({pct_str:6s}, {time_str:12s}) | {annotation.perception[:60]}...")
+                else:
+                    # 正常流程
+                    pct_str_trimmed = f"{trim_info['failure_position_trimmed']}%" if trim_info['failure_position_trimmed'] is not None else "N/A"
+                    pct_str_original = f"{failure_position_original:.1f}%"
+                    time_str = f"{failure_time:.2f}s" if failure_time is not None else "N/A"
+                    print(f"         step={failure_step:3d} (trimmed {pct_str_trimmed:4s} → original {pct_str_original:6s}, {time_str:8s}) | {annotation.perception[:60]}...")
 
                 task_results.append({
                     "episode_id": ep_id,
@@ -537,6 +603,8 @@ def main():
                     "failure_position_original_percent": failure_position_original,
                     'failure_step': failure_step,
                     "failure_time_sec": failure_time,
+                    "has_gt_fail_time": has_gt_fail_time,
+                    "gt_fail_time": ep.get("gt_fail_time"),
                     "perception": annotation.perception,
                     "summary": annotation.summary,
                     "reflection": annotation.reflection,

@@ -30,10 +30,10 @@ if __name__ == "__main__":
     if os.path.exists(output_dir) is False:
         os.mkdir(output_dir)
 
-    tasks = list(MULTI_STAGE_TASK_DATASETS) + list(SINGLE_STAGE_TASK_DATASETS)
+    tasks = list(SINGLE_STAGE_TASK_DATASETS)
 
     for task_i, task in enumerate(tasks):
-        ds_path = get_ds_path(task, ds_type="human_im")
+        ds_path = get_ds_path(task, ds_type="mg_im")
 
         parser = argparse.Namespace()
         parser.dataset = ds_path
@@ -50,12 +50,13 @@ if __name__ == "__main__":
             "robot0_eye_in_hand",
         ]
         parser.use_obs = True
-        parser.n = None
+        parser.n = 350
         parser.filter_key = None
         parser.video_skip = 1
         parser.first = False
         parser.verbose = False
         parser.extend_states = False
+        # 使用obs回放时image的大小是不起作用的
         parser.camera_height = 256
         parser.camera_width = 256
 
